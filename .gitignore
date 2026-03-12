@@ -6,3 +6,4 @@ ffmpeg_temp/
 __pycache__/
 *.pyc
 downloads/
+saved_videos/

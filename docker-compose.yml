@@ -1,0 +1,15 @@
+services:
+  bot:
+    build: .
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+    # This is the "Proper Fix" for Docker DNS issues on Windows/VPNs
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    # Ensure health check port is available if needed
+    ports:
+      - "7860:7860"

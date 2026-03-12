@@ -14,8 +14,14 @@ load_dotenv()
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# Use a local folder for temporary downloads
-BASE_DOWNLOAD_FOLDER = "downloads"
+# Determine download folder based on environment
+if os.name == 'nt':  # Windows / Laptop
+    BASE_DOWNLOAD_FOLDER = r"C:\Users\ay835\Downloads\TelegramBot_Videos"
+else:  # Linux / Docker / Cloud
+    BASE_DOWNLOAD_FOLDER = "downloads"
+
+# Ensure the folder exists immediately
+os.makedirs(BASE_DOWNLOAD_FOLDER, exist_ok=True)
 
 # Configure logging
 logging.basicConfig(
@@ -166,19 +172,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=f"❌ **Failed**\n\n{nice_error}"
         )
     finally:
-        # Cleanup: Delete the file after sending or error
+        # Keep the file in the downloads folder as requested
         if file_to_send and os.path.exists(file_to_send):
-            try:
-                os.remove(file_to_send)
-                logging.info(f"Cleaned up file: {file_to_send}")
-            except Exception as e:
-                logging.error(f"Cleanup error: {e}")
+            logging.info(f"Video kept in downloads folder: {file_to_send}")
 
 if __name__ == '__main__':
     # Ensure download folder exists
     os.makedirs(BASE_DOWNLOAD_FOLDER, exist_ok=True)
     
     application = ApplicationBuilder().token(TOKEN).build()
+    
+    # Add a simple connectivity check before starting
+    def wait_for_network():
+        import socket
+        import time
+        print("Checking network connectivity...")
+        while True:
+            try:
+                # Try to resolve telegram API
+                socket.gethostbyname("api.telegram.org")
+                print("Network is up!")
+                return True
+            except socket.gaierror:
+                print("Waiting for network (DNS resolution failed)...")
+                time.sleep(5)
+
+    # Check network first
+    wait_for_network()
     
     start_handler = CommandHandler('start', start)
     message_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
@@ -187,4 +207,5 @@ if __name__ == '__main__':
     application.add_handler(message_handler)
     
     print(f"Bot is running! Temporary storage in: {BASE_DOWNLOAD_FOLDER}")
-    application.run_polling()
+    # run_polling is a blocking call and should not be called inside an awaited function in v20+
+    application.run_polling(bootstrap_retries=5)
