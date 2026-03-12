@@ -5,4 +5,4 @@ ffmpeg.zip
 ffmpeg_temp/
 __pycache__/
 *.pyc
-TelegramBot_Videos/
+downloads/
