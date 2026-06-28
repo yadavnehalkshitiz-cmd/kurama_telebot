@@ -1,0 +1,53 @@
+name: Flutter Build CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  build:
+    name: Build Android & Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java (for Android SDK)
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5' # specify your desired flutter version
+          channel: 'stable'
+
+      - name: Get dependencies
+        run: flutter pub get
+        working-directory: ./kurama_mobile
+
+      - name: Build Android APK
+        run: flutter build apk --release
+        working-directory: ./kurama_mobile
+
+      - name: Build Windows Executable
+        run: flutter build windows --release
+        working-directory: ./kurama_mobile
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KuramaBot-Android-APK
+          path: kurama_mobile/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload Windows Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: KuramaBot-Windows-App
+          path: kurama_mobile/build/windows/x64/runner/Release/
