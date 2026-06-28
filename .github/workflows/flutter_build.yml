@@ -25,8 +25,14 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5' # specify your desired flutter version
           channel: 'stable'
+
+      - name: Enable Desktop Support
+        run: flutter config --enable-windows-desktop
+
+      - name: Create Platform Runners
+        run: flutter create --platforms=android,windows .
+        working-directory: ./kurama_mobile
 
       - name: Get dependencies
         run: flutter pub get
