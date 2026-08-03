@@ -752,7 +752,7 @@ async def _handle_format(query, chat_id, data):
         await _show_audio_quality(query, chat_id)
     elif fmt == "doc":
         # Document: no quality choice, go straight to destination
-        await _show_destination(query, chat_id, video=False, audio=False, doc=True)
+        await _show_destination(query, chat_id, video=False, audio=False, doc=True, context=context)
 
 
 async def _show_video_quality(query, chat_id):
@@ -785,7 +785,7 @@ async def _handle_video_quality(query, chat_id, data):
         return
     quality = data.split("_", 1)[1]  # "best", "1080p", etc.
     sess["video_quality"] = quality
-    await _show_destination(query, chat_id, video=True)
+    await _show_destination(query, chat_id, video=True, context=context)
 
 
 async def _handle_audio_quality(query, chat_id, data):
@@ -794,13 +794,22 @@ async def _handle_audio_quality(query, chat_id, data):
         return
     quality = data.split("_", 1)[1]  # "best", "320k", etc.
     sess["audio_quality"] = quality
-    await _show_destination(query, chat_id, audio=True)
+    await _show_destination(query, chat_id, audio=True, context=context)
 
 
-async def _show_destination(query, chat_id, video=False, audio=False, doc=False):
+async def _show_destination(query, chat_id, video=False, audio=False, doc=False, context=None):
     s = sessions.get(chat_id)
     if not s:
         return
+
+    # ── Admin gets full destination picker ──────────────
+    # Regular users skip the picker — auto-download to Telegram
+    is_admin = config.ADMIN_CHAT_ID and chat_id == config.ADMIN_CHAT_ID
+    if not is_admin:
+        s["destination"] = "mobile"
+        await _run_download(chat_id, query, context)
+        return
+
     title = shorten(s["title"], 50)
     fmt_label = {"video": "🎬 Video", "audio": "🎵 Audio", "doc": "📄 File"}.get(
         s.get("format", "video"), "🎬 Video"
