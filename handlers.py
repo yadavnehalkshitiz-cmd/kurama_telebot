@@ -947,15 +947,11 @@ async def _run_download(chat_id, query, context):
 
     # ── Post-download actions ───────────────────────────
     try:
-        if dest == "laptop":
-            await _handle_laptop_done(query, chat_id, title, filepath, file_size, audio_only)
-        elif dest == "mobile":
-            await _handle_mobile_done(query, context, chat_id, title, filepath, icon, audio_only, send_as_doc)
-        elif dest == "both":
-            await _handle_both_done(query, context, chat_id, title, filepath, icon)
+        await _handle_mobile_done(query, context, chat_id, title, filepath, icon, audio_only, send_as_doc)
     except Exception as e:
         logger.error(f"Post-download error: {e}")
         await edit_msg(f"⚠️ *Downloaded but error:* `{str(e)[:200]}`\n💾 File: `{filepath}`")
+
 
     # ── Clean current session ───────────────────────────
     sess.pop("filepath", None)  # keep other info for now
