@@ -128,6 +128,39 @@ class ApiClient {
         .toList();
   }
 
+  /// Fetch user profile (credits balance & subscription status).
+  Future<Map<String, dynamic>> getUserProfile(int userId) async {
+    final resp = await http.get(
+      Uri.parse('$baseUrl/api/user/$userId/profile'),
+      headers: _headers,
+    );
+    if (resp.statusCode != 200) {
+      final err = _extractError(resp);
+      throw ApiException(err);
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  /// Submit a payment transaction ID for admin verification.
+  Future<Map<String, dynamic>> submitPayment({
+    required int userId,
+    required String txId,
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$baseUrl/api/user/submit_payment'),
+      headers: _headers,
+      body: jsonEncode({
+        'user_id': userId,
+        'tx_id': txId,
+      }),
+    );
+    if (resp.statusCode != 200) {
+      final err = _extractError(resp);
+      throw ApiException(err);
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
   String _extractError(http.Response resp) {
     try {
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
