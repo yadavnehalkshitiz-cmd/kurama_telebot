@@ -30,7 +30,8 @@ COOKIES_FOLDER = os.path.join(BASE_DIR, "cookies")
 os.makedirs(COOKIES_FOLDER, exist_ok=True)
 
 # User config persistence
-USER_CONFIGS_FILE = os.path.join(BASE_DIR, "user_configs.json")
+USER_CONFIGS_FILE = os.getenv("USER_CONFIGS_FILE") or os.path.join(BASE_DIR, "user_configs.json")
+
 
 # ─── Thumbnail cache ────────────────────────────────────
 THUMB_CACHE = os.path.join(BASE_DIR, "thumb_cache")
