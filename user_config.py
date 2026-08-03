@@ -4,7 +4,8 @@ import json
 import os
 import tempfile
 import threading
-from config import USER_CONFIGS_FILE
+from datetime import datetime, timedelta, timezone
+from config import USER_CONFIGS_FILE, INITIAL_FREE_CREDITS
 
 # Threading lock for atomic read/write of the config file.
 # Safe for single-process multi-threaded access (asyncio.to_thread, daemon threads).
@@ -97,8 +98,128 @@ def clear_queue(chat_id: int):
     set_queue(chat_id, [])
 
 
+# ─── Billing & Subscription System ─────────────────────
+
+def _ensure_user_profile(chat_id: int) -> dict:
+    """Ensure user entry exists with billing fields."""
+    cid = str(chat_id)
+    if cid not in _configs:
+        _configs[cid] = {}
+    
+    cfg = _configs[cid]
+    changed = False
+    if "credits" not in cfg:
+        cfg["credits"] = INITIAL_FREE_CREDITS
+        changed = True
+    if "subscription_expires_at" not in cfg:
+        cfg["subscription_expires_at"] = None
+        changed = True
+    if "pending_payments" not in cfg:
+        cfg["pending_payments"] = []
+        changed = True
+
+    if changed:
+        save(_configs)
+    return cfg
+
+
+def get_user_credits(chat_id: int) -> int:
+    """Return remaining free credits for a user."""
+    cfg = _ensure_user_profile(chat_id)
+    return cfg.get("credits", INITIAL_FREE_CREDITS)
+
+
+def is_subscription_active(chat_id: int) -> bool:
+    """Check if the user has an active 30-day premium subscription."""
+    cfg = _ensure_user_profile(chat_id)
+    expiry_str = cfg.get("subscription_expires_at")
+    if not expiry_str:
+        return False
+    try:
+        expiry_dt = datetime.fromisoformat(expiry_str)
+        now_dt = datetime.now(timezone.utc)
+        return expiry_dt > now_dt
+    except (ValueError, TypeError):
+        return False
+
+
+def get_subscription_expiry(chat_id: int) -> str | None:
+    """Return ISO format string of subscription expiry, or None."""
+    cfg = _ensure_user_profile(chat_id)
+    return cfg.get("subscription_expires_at")
+
+
+def deduct_credit(chat_id: int) -> bool:
+    """
+    Deduct 1 credit if user is not on an active subscription.
+    Returns True if deduction succeeded or user has active sub, False if 0 credits.
+    """
+    if is_subscription_active(chat_id):
+        return True
+    
+    cfg = _ensure_user_profile(chat_id)
+    current_credits = cfg.get("credits", 0)
+    if current_credits > 0:
+        cfg["credits"] = current_credits - 1
+        save(_configs)
+        return True
+    return False
+
+
+def grant_subscription(chat_id: int, days: int = 30):
+    """Grant or extend a user's premium subscription by `days` days."""
+    cfg = _ensure_user_profile(chat_id)
+    now = datetime.now(timezone.utc)
+    
+    current_expiry_str = cfg.get("subscription_expires_at")
+    if current_expiry_str:
+        try:
+            curr_expiry = datetime.fromisoformat(current_expiry_str)
+            if curr_expiry > now:
+                new_expiry = curr_expiry + timedelta(days=days)
+            else:
+                new_expiry = now + timedelta(days=days)
+        except (ValueError, TypeError):
+            new_expiry = now + timedelta(days=days)
+    else:
+        new_expiry = now + timedelta(days=days)
+        
+    cfg["subscription_expires_at"] = new_expiry.isoformat()
+    save(_configs)
+    return new_expiry.isoformat()
+
+
+def add_pending_payment(chat_id: int, tx_id: str, amount: int = 500) -> dict:
+    """Record a pending payment for admin review."""
+    cfg = _ensure_user_profile(chat_id)
+    payment = {
+        "tx_id": tx_id.strip(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "amount": amount,
+        "status": "PENDING"
+    }
+    cfg["pending_payments"].append(payment)
+    save(_configs)
+    return payment
+
+
+def update_payment_status(chat_id: int, tx_id: str, status: str) -> bool:
+    """Update status of a transaction (APPROVED / REJECTED)."""
+    cfg = _ensure_user_profile(chat_id)
+    updated = False
+    for p in cfg.get("pending_payments", []):
+        if p.get("tx_id") == tx_id.strip() and p.get("status") == "PENDING":
+            p["status"] = status.upper()
+            updated = True
+            break
+    if updated:
+        save(_configs)
+    return updated
+
+
 # ─── Module-level cache ─────────────────────────────────
 # Loaded once at import. This is intentional for single-process bots —
 # all mutations go through the functions above which update both
 # the in-memory dict and the on-disk file atomically.
 _configs = load()
+

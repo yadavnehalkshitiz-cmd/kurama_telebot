@@ -334,6 +334,43 @@ def api_download_file(task_id: str, auth=Depends(verify_auth)):
 
 
 # ═══════════════════════════════════════════════════════
+#  BILLING & USER ENDPOINTS
+# ═══════════════════════════════════════════════════════
+
+import user_config
+
+class PaymentSubmitRequest(BaseModel):
+    user_id: int
+    tx_id: str
+
+@app.get("/api/user/{user_id}/profile")
+def api_get_user_profile(user_id: int, auth=Depends(verify_auth)):
+    credits = user_config.get_user_credits(user_id)
+    is_sub = user_config.is_subscription_active(user_id)
+    expiry = user_config.get_subscription_expiry(user_id)
+    return {
+        "user_id": user_id,
+        "credits": credits,
+        "is_subscription_active": is_sub,
+        "subscription_expires_at": expiry,
+        "monthly_price_npr": 500
+    }
+
+@app.post("/api/user/submit_payment")
+def api_submit_payment(req: PaymentSubmitRequest, auth=Depends(verify_auth)):
+    if not req.tx_id.strip():
+        raise HTTPException(400, "Transaction ID cannot be empty")
+    user_config.add_pending_payment(req.user_id, req.tx_id)
+    return {
+        "status": "submitted",
+        "user_id": req.user_id,
+        "tx_id": req.tx_id,
+        "message": "Payment submitted for admin review"
+    }
+
+
+
+# ═══════════════════════════════════════════════════════
 #  RUNNER
 # ═══════════════════════════════════════════════════════
 

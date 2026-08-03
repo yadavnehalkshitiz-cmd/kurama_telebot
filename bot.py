@@ -41,6 +41,9 @@ from handlers import (
     cancel_cmd,
     queue_cmd,
     setfolder_cmd,
+    credits_cmd,
+    buy_cmd,
+    submitpayment_cmd,
     handle_message,
     handle_callback,
 )
@@ -109,6 +112,9 @@ def main():
     # ── Commands ────────────────────────────────────────
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("credits", credits_cmd))
+    app.add_handler(CommandHandler("buy", buy_cmd))
+    app.add_handler(CommandHandler("submitpayment", submitpayment_cmd))
     app.add_handler(CommandHandler("cookies", cookies_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))
     app.add_handler(CommandHandler("queue", queue_cmd))

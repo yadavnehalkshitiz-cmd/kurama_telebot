@@ -169,3 +169,16 @@ TWITTER_BEARER_TOKEN = os.getenv(
 )
 INSTAGRAM_APP_ID = os.getenv("INSTAGRAM_APP_ID", "936619743392459")
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "kimne78kx3ncx6brgo4mv6wki5h1ko")
+
+# ─── Billing & Subscription System ─────────────────────
+INITIAL_FREE_CREDITS = int(os.getenv("INITIAL_FREE_CREDITS", "3"))
+MONTHLY_SUB_PRICE_NPR = int(os.getenv("MONTHLY_SUB_PRICE_NPR", "500"))
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
+
+ESEWA_ID = os.getenv("ESEWA_ID", "9800000000")
+KHALTI_ID = os.getenv("KHALTI_ID", "9800000000")
+BANK_DETAILS = os.getenv(
+    "BANK_DETAILS",
+    "📲 eSewa ID: 9800000000\n📲 Khalti ID: 9800000000\n🏦 Bank: NIC Asia (AC: 123456789012345)",
+)
+

@@ -81,3 +81,26 @@ def setfolder_confirm():
             InlineKeyboardButton("❌ No", callback_data="mkdir_no"),
         ],
     ])
+
+
+def buy_subscription_keyboard():
+    """Subscription purchase options."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💳 Buy Subscription (500 NPR)", callback_data="buy_info"),
+        ],
+        [
+            InlineKeyboardButton("📊 My Balance / Status", callback_data="check_credits"),
+        ],
+    ])
+
+
+def admin_payment_approval_keyboard(user_id: int, tx_id: str):
+    """Admin inline keyboard for payment verification."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Approve", callback_data=f"pay_approve_{user_id}_{tx_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"pay_reject_{user_id}_{tx_id}"),
+        ],
+    ])
+

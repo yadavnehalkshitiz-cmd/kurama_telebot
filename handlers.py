@@ -37,6 +37,8 @@ from keyboards import (
     destination_picker,
     playlist_actions,
     setfolder_confirm,
+    buy_subscription_keyboard,
+    admin_payment_approval_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,12 +66,21 @@ _state_lock = asyncio.Lock()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
+    chat_id = update.effective_chat.id
+    credits = user_config.get_user_credits(chat_id)
+    is_sub = user_config.is_subscription_active(chat_id)
+
+    tier_msg = "⭐ *KuramaBot Premium* (Unlimited)" if is_sub else f"🎟️ *Free Tier:* `{credits}` free credits left"
+
     await update.message.reply_text(
         f"👋 *Hello {user}!* I'm KuramaBot 🦊\n\n"
+        f"{tier_msg}\n\n"
         "📎 Send me any link and I'll help you download it.\n\n"
         "‣ *Choose format*: 🎬 Video · 🎵 Audio · 📄 File (no re-encode)\n"
         "‣ *Choose quality*: Best · 1080p · 720p · 480p\n"
         "‣ *Choose destination*: 💻 Laptop · 📱 Telegram\n\n"
+        "💳 *Buy Premium:* `/buy` (500 NPR/mo)\n"
+        "📊 *Check Balance:* `/credits`\n"
         "📂 *Custom folder:* `/setfolder C:\\\\path\\\\to\\\\folder`\n"
         "📋 *Queue:* Send multiple URLs, they'll download one by one\n\n"
         "🌐 YouTube · Instagram · TikTok · Facebook · Twitter/X\n"
@@ -87,23 +98,101 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2. Pick *format*: 🎬 Video / 🎵 Audio / 📄 File\n"
         "3. Pick *quality*: Best · 1080p · 720p · 480p\n"
         "4. Pick *destination*: 💻 Laptop · 📱 Telegram\n\n"
-        "*Playlist support:*\n"
-        "Send a playlist link and I'll offer to download all videos\n\n"
-        "*Queue:*\n"
-        "Send multiple URLs — they queue up and download one at a time\n\n"
-        "*Custom Folder:*\n"
-        "  `/setfolder C:\\\\path\\\\to\\\\folder` — set your save path\n"
-        "  `/setfolder default` — reset to default\n\n"
+        "*Credits & Premium:*\n"
+        "Every user gets **3 free credits**. Premium costs **500 NPR/mo** for unlimited downloads.\n\n"
         "*Commands:*\n"
         "  /start   — Welcome\n"
-        "  /help    — This page\n"
+        "  /credits — View free credits & subscription status\n"
+        "  /buy     — Buy 1 Month Premium (500 NPR)\n"
+        "  /submitpayment <tx_id> — Submit transaction code\n"
+        "  /help    — Help menu\n"
         "  /cookies — Cookie setup guide\n"
         "  /setfolder — Custom download folder\n"
-        "  /queue   — View your download queue\n"
-        "  /cancel  — Cancel current operation\n\n"
-        "_All files are saved to your laptop only. Nothing is uploaded._",
+        "  /queue   — View download queue\n"
+        "  /cancel  — Cancel current operation\n",
         parse_mode="Markdown",
     )
+
+
+async def credits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    credits = user_config.get_user_credits(chat_id)
+    is_sub = user_config.is_subscription_active(chat_id)
+    expiry = user_config.get_subscription_expiry(chat_id)
+
+    if is_sub:
+        exp_date = expiry[:10] if expiry else "N/A"
+        sub_status = f"✅ *ACTIVE (Unlimited Downloads)*\n📅 *Expires:* `{exp_date}`"
+    else:
+        sub_status = f"❌ *Inactive (Free Tier)*\n🎟️ *Free Credits Remaining:* `{credits}` / 3"
+
+    await update.message.reply_text(
+        f"📊 *Your KuramaBot Plan & Credits*\n\n"
+        f"{sub_status}\n\n"
+        f"💳 Premium Subscription: *500 NPR / month*\n"
+        f"Includes unlimited video and audio downloads!",
+        parse_mode="Markdown",
+        reply_markup=keyboards.buy_subscription_keyboard(),
+    )
+
+
+async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"⭐ *KuramaBot Premium Subscription* ⭐\n\n"
+        f"Get *unlimited downloads* for *500 NPR / month*!\n\n"
+        f"📌 *Payment Options (Nepal):*\n"
+        f"{config.BANK_DETAILS}\n\n"
+        f"📝 *How to Activate:* \n"
+        f"1️⃣ Transfer **500 NPR** via eSewa / Khalti / Bank.\n"
+        f"2️⃣ Copy your **Transaction ID / Reference Code**.\n"
+        f"3️⃣ Send command `/submitpayment <tx_id>` in this chat!\n"
+        f"    _(Example: `/submitpayment 987654321`)_\n\n"
+        f"⏳ Your subscription will be activated upon admin confirmation.",
+        parse_mode="Markdown",
+    )
+
+
+async def submitpayment_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ Please provide your payment Transaction ID.\n"
+            "Example: `/submitpayment 987654321`",
+            parse_mode="Markdown",
+        )
+        return
+
+    tx_id = " ".join(context.args).strip()
+    user_config.add_pending_payment(chat_id, tx_id, amount=config.MONTHLY_SUB_PRICE_NPR)
+
+    await update.message.reply_text(
+        f"✅ *Payment Submitted for Review!*\n\n"
+        f"🆔 *Transaction ID:* `{tx_id}`\n"
+        f"💰 *Amount:* 500 NPR\n\n"
+        f"⏳ Your subscription will be activated upon admin confirmation.",
+        parse_mode="Markdown",
+    )
+
+    if config.ADMIN_CHAT_ID:
+        try:
+            admin_text = (
+                f"💳 *NEW PAYMENT SUBMISSION*\n\n"
+                f"👤 *User:* [{clean_md(user.first_name)}](tg://user?id={chat_id}) (`{chat_id}`)\n"
+                f"🆔 *Tx ID:* `{clean_md(tx_id)}`\n"
+                f"💵 *Amount:* 500 NPR\n"
+                f"📅 *Time:* `{time.strftime('%Y-%m-%d %H:%M:%S')}`"
+            )
+            await context.bot.send_message(
+                chat_id=config.ADMIN_CHAT_ID,
+                text=admin_text,
+                parse_mode="Markdown",
+                reply_markup=keyboards.admin_payment_approval_keyboard(chat_id, tx_id),
+            )
+        except Exception as e:
+            logger.error(f"Failed to send admin notification: {e}")
+
 
 
 async def cookies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -366,6 +455,63 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _safe_edit(query, "❌ *Cancelled.*")
         return
 
+    # ── Billing & Payment callbacks ─────────────────────
+    if data == "buy_info":
+        await _safe_edit(
+            query,
+            f"⭐ *KuramaBot Premium (500 NPR / mo)* ⭐\n\n"
+            f"📌 *Payment Options (Nepal):*\n"
+            f"{config.BANK_DETAILS}\n\n"
+            f"📝 Send `/submitpayment <tx_id>` to activate!",
+            reply_markup=buy_subscription_keyboard(),
+        )
+        return
+
+    if data == "check_credits":
+        credits = user_config.get_user_credits(chat_id)
+        is_sub = user_config.is_subscription_active(chat_id)
+        expiry = user_config.get_subscription_expiry(chat_id)
+        if is_sub:
+            msg = f"✅ *Subscription Active*\n📅 Expires: `{expiry[:10] if expiry else 'N/A'}`"
+        else:
+            msg = f"🎟️ *Free Credits Remaining:* `{credits}` / 3"
+        await _safe_edit(query, f"📊 *Status:* {msg}", reply_markup=buy_subscription_keyboard())
+        return
+
+    if data.startswith("pay_approve_"):
+        parts = data.split("_")
+        target_user = int(parts[2])
+        tx_id = "_".join(parts[3:])
+        user_config.update_payment_status(target_user, tx_id, "APPROVED")
+        exp = user_config.grant_subscription(target_user, days=30)
+        exp_str = exp[:10] if exp else "N/A"
+        await _safe_edit(query, f"✅ *PAYMENT APPROVED*\nUser `{target_user}` active until `{exp_str}`.")
+        try:
+            await context.bot.send_message(
+                chat_id=target_user,
+                text=f"🎉 *Payment Approved!*\n\nYour KuramaBot Premium subscription is now **ACTIVE** until `{exp_str}`! Enjoy unlimited downloads. 🚀",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {target_user}: {e}")
+        return
+
+    if data.startswith("pay_reject_"):
+        parts = data.split("_")
+        target_user = int(parts[2])
+        tx_id = "_".join(parts[3:])
+        user_config.update_payment_status(target_user, tx_id, "REJECTED")
+        await _safe_edit(query, f"❌ *PAYMENT REJECTED*\nTx `{tx_id}` rejected for user `{target_user}`.")
+        try:
+            await context.bot.send_message(
+                chat_id=target_user,
+                text=f"❌ *Payment Verification Failed*\n\nYour transaction `{tx_id}` could not be verified. Please check the ID or contact support.",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {target_user}: {e}")
+        return
+
     # ── Mkdir callbacks ─────────────────────────────────
     if data == "mkdir_yes":
         await _handle_mkdir_yes(query, context, chat_id)
@@ -564,6 +710,21 @@ async def _run_download(chat_id, query, context):
     sess = sessions.get(chat_id)
     if not sess:
         return
+
+    # ── Check billing / credits ─────────────────────────
+    if not user_config.is_subscription_active(chat_id) and user_config.get_user_credits(chat_id) <= 0:
+        await _safe_edit(
+            query,
+            "🔒 *Free Download Limit Reached!*\n\n"
+            "You have used all **3 free credits**.\n"
+            "Upgrade to **KuramaBot Premium** for only **500 NPR / month** to get unlimited downloads!",
+            reply_markup=buy_subscription_keyboard(),
+        )
+        _cleanup_session(chat_id)
+        return
+
+    # Deduct credit for free tier user
+    user_config.deduct_credit(chat_id)
 
     async with _state_lock:
         active_downloads.add(chat_id)
