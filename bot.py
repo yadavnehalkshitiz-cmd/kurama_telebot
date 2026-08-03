@@ -44,6 +44,10 @@ from handlers import (
     credits_cmd,
     buy_cmd,
     submitpayment_cmd,
+    admin_cmd,
+    grantpremium_cmd,
+    setcredits_cmd,
+    revokeplan_cmd,
     handle_message,
     handle_callback,
 )
@@ -115,6 +119,11 @@ def main():
     app.add_handler(CommandHandler("credits", credits_cmd))
     app.add_handler(CommandHandler("buy", buy_cmd))
     app.add_handler(CommandHandler("submitpayment", submitpayment_cmd))
+    # ── Admin commands (only works from ADMIN_CHAT_ID) ────
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CommandHandler("grantpremium", grantpremium_cmd))
+    app.add_handler(CommandHandler("setcredits", setcredits_cmd))
+    app.add_handler(CommandHandler("revokeplan", revokeplan_cmd))
     app.add_handler(CommandHandler("cookies", cookies_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))
     app.add_handler(CommandHandler("queue", queue_cmd))
@@ -125,9 +134,20 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     # ── Start ───────────────────────────────────────────
-    print("[BOT] KuramaBot running!")
-    print(f"[BOT] Laptop downloads -> {LAPTOP_FOLDER}")
-    print("[BOT] Send a link in Telegram to get started.")
+    from config import ADMIN_CHAT_ID, ESEWA_ID, INITIAL_FREE_CREDITS, MONTHLY_SUB_PRICE_NPR
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("🦊  KuramaBot starting up…")
+    print(f"[BOT] Laptop downloads  → {LAPTOP_FOLDER}")
+    print(f"[BOT] Free credits      → {INITIAL_FREE_CREDITS} per new user")
+    print(f"[BOT] Subscription      → {MONTHLY_SUB_PRICE_NPR} NPR / month")
+    if ADMIN_CHAT_ID:
+        print(f"[BOT] Admin chat ID     → {ADMIN_CHAT_ID} ✅")
+    else:
+        print("[BOT] ⚠️  ADMIN_CHAT_ID not set — payment alerts DISABLED!")
+        print("[BOT]    Set ADMIN_CHAT_ID=<your_telegram_id> in Render env vars.")
+    if ESEWA_ID == "9800000000":
+        print("[BOT] ⚠️  ESEWA_ID is still the placeholder — update in Render env vars!")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     app.run_polling(bootstrap_retries=5, drop_pending_updates=True)
 

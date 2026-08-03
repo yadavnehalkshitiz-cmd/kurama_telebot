@@ -223,3 +223,79 @@ def update_payment_status(chat_id: int, tx_id: str, status: str) -> bool:
 # the in-memory dict and the on-disk file atomically.
 _configs = load()
 
+
+# ─── Admin helpers ──────────────────────────────────────
+
+def get_all_users() -> list[dict]:
+    """Return a summary list of all known users for admin overview."""
+    now = datetime.now(timezone.utc)
+    result = []
+    for cid, cfg in _configs.items():
+        expiry_str = cfg.get("subscription_expires_at")
+        active = False
+        if expiry_str:
+            try:
+                active = datetime.fromisoformat(expiry_str) > now
+            except (ValueError, TypeError):
+                pass
+        pending = [p for p in cfg.get("pending_payments", []) if p.get("status") == "PENDING"]
+        result.append({
+            "chat_id": cid,
+            "credits": cfg.get("credits", INITIAL_FREE_CREDITS),
+            "subscription_active": active,
+            "subscription_expires_at": expiry_str,
+            "pending_payment_count": len(pending),
+        })
+    return result
+
+
+def get_pending_payments() -> list[dict]:
+    """Return all PENDING payments across all users."""
+    pending = []
+    for cid, cfg in _configs.items():
+        for p in cfg.get("pending_payments", []):
+            if p.get("status") == "PENDING":
+                pending.append({"chat_id": cid, **p})
+    return pending
+
+
+def admin_set_credits(chat_id: int, credits: int):
+    """Manually set a user's free credits (admin action)."""
+    cfg = _ensure_user_profile(chat_id)
+    cfg["credits"] = max(0, credits)
+    save(_configs)
+
+
+def admin_revoke_subscription(chat_id: int):
+    """Immediately revoke a user's subscription (admin action)."""
+    cfg = _ensure_user_profile(chat_id)
+    cfg["subscription_expires_at"] = None
+    save(_configs)
+
+
+def get_stats() -> dict:
+    """Return high-level stats for admin dashboard."""
+    now = datetime.now(timezone.utc)
+    total = len(_configs)
+    active_subs = 0
+    zero_credits = 0
+    pending_payments = 0
+    for cfg in _configs.values():
+        expiry_str = cfg.get("subscription_expires_at")
+        if expiry_str:
+            try:
+                if datetime.fromisoformat(expiry_str) > now:
+                    active_subs += 1
+            except (ValueError, TypeError):
+                pass
+        if cfg.get("credits", INITIAL_FREE_CREDITS) <= 0 and not expiry_str:
+            zero_credits += 1
+        pending_payments += sum(
+            1 for p in cfg.get("pending_payments", []) if p.get("status") == "PENDING"
+        )
+    return {
+        "total_users": total,
+        "active_subscribers": active_subs,
+        "free_tier_exhausted": zero_credits,
+        "pending_payments": pending_payments,
+    }

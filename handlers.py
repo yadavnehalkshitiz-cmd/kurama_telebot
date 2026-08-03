@@ -195,7 +195,150 @@ async def submitpayment_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin dashboard — shows stats + all users. Only accessible by admin."""
+    chat_id = update.effective_chat.id
+
+    if not config.ADMIN_CHAT_ID or chat_id != config.ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ You are not authorised to use this command.")
+        return
+
+    stats = user_config.get_stats()
+    users = user_config.get_all_users()
+    pending = user_config.get_pending_payments()
+
+    # ── Stats summary ──────────────────────────────────
+    lines = [
+        "🛠️ *KuramaBot Admin Dashboard*\n",
+        f"👥 Total users: `{stats['total_users']}`",
+        f"⭐ Active subscribers: `{stats['active_subscribers']}`",
+        f"🔴 Free credits exhausted: `{stats['free_tier_exhausted']}`",
+        f"💳 Pending payments: `{stats['pending_payments']}`\n",
+    ]
+
+    # ── Pending payments ──────────────────────────────
+    if pending:
+        lines.append("📋 *Pending Payments:*")
+        for p in pending[:10]:  # max 10 shown
+            lines.append(
+                f"  • User `{p['chat_id']}` — Tx `{p['tx_id']}` — "
+                f"{p['amount']} NPR — `{p['timestamp'][:10]}`"
+            )
+        lines.append("")
+
+    # ── User list (first 20) ───────────────────────────
+    lines.append("👤 *User List (latest 20):*")
+    for u in users[:20]:
+        sub_icon = "⭐" if u["subscription_active"] else ("🔴" if u["credits"] <= 0 else "🟢")
+        exp = u["subscription_expires_at"][:10] if u["subscription_active"] and u["subscription_expires_at"] else "-"
+        lines.append(
+            f"  {sub_icon} `{u['chat_id']}` — {u['credits']}cr — exp:`{exp}`"
+            + (f" ⚠️{u['pending_payment_count']}pending" if u["pending_payment_count"] else "")
+        )
+
+    lines.append("\n*Admin commands:*")
+    lines.append("  `/grantpremium <user_id> [days]` — grant subscription")
+    lines.append("  `/setcredits <user_id> <n>` — set free credits")
+    lines.append("  `/revokeplan <user_id>` — cancel subscription")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def grantpremium_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: manually grant N days of premium to a user."""
+    chat_id = update.effective_chat.id
+    if not config.ADMIN_CHAT_ID or chat_id != config.ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/grantpremium <user_id> [days]`\nDefault days = 30",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        target_id = int(args[0])
+        days = int(args[1]) if len(args) > 1 else 30
+    except ValueError:
+        await update.message.reply_text("⚠️ Invalid arguments. Usage: `/grantpremium <user_id> [days]`", parse_mode="Markdown")
+        return
+
+    expiry = user_config.grant_subscription(target_id, days=days)
+    exp_str = expiry[:10] if expiry else "N/A"
+    await update.message.reply_text(
+        f"✅ *Subscription granted!*\nUser: `{target_id}`\nDays: `{days}`\nExpires: `{exp_str}`",
+        parse_mode="Markdown",
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=f"🎉 *Your KuramaBot Premium has been activated!*\n\n"
+                 f"✅ Unlimited downloads active until `{exp_str}`. Enjoy! 🚀",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.warning(f"Could not notify user {target_id}: {e}")
+
+
+async def setcredits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: manually set a user's free credit balance."""
+    chat_id = update.effective_chat.id
+    if not config.ADMIN_CHAT_ID or chat_id != config.ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Usage: `/setcredits <user_id> <credits>`",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        target_id = int(args[0])
+        credits = int(args[1])
+    except ValueError:
+        await update.message.reply_text("⚠️ Invalid arguments.", parse_mode="Markdown")
+        return
+
+    user_config.admin_set_credits(target_id, credits)
+    await update.message.reply_text(
+        f"✅ *Credits updated!*\nUser: `{target_id}` → `{credits}` credits",
+        parse_mode="Markdown",
+    )
+
+
+async def revokeplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: immediately revoke a user's subscription."""
+    chat_id = update.effective_chat.id
+    if not config.ADMIN_CHAT_ID or chat_id != config.ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: `/revokeplan <user_id>`", parse_mode="Markdown")
+        return
+
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("⚠️ Invalid user ID.", parse_mode="Markdown")
+        return
+
+    user_config.admin_revoke_subscription(target_id)
+    await update.message.reply_text(
+        f"🚫 *Subscription revoked.*\nUser: `{target_id}`",
+        parse_mode="Markdown",
+    )
+
+
 async def cookies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     cookies_path = COOKIES_FOLDER
     platforms = ["instagram", "youtube", "twitter", "facebook", "tiktok", "reddit"]
     lines = []
