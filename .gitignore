@@ -7,3 +7,14 @@ __pycache__/
 *.pyc
 downloads/
 saved_videos/
+temp_mobile/
+
+# Cookie files — NEVER commit these, they contain your login sessions
+cookies/*.txt
+cookies.txt
+
+# Runtime-generated files
+thumb_cache/
+user_configs.json
+*.log
+bot_output.log

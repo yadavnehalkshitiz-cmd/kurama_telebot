@@ -1,3 +1,6 @@
-python-telegram-bot
+python-telegram-bot>=20.0
 yt-dlp
 python-dotenv
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
