@@ -58,8 +58,10 @@ VIDEO_QUALITIES = {
 }
 
 MOBILE_QUALITIES = {
-    "720p":  "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[height<=720]/best",
-    "480p":  "bestvideo[ext=mp4][height<=480]+bestaudio[ext=m4a]/best[height<=480]/best",
+    "best":  "best[ext=mp4]/best",
+    "1080p": "best[height<=1080][ext=mp4]/best[height<=1080]/best",
+    "720p":  "best[height<=720][ext=mp4]/best[height<=720]/best",
+    "480p":  "best[height<=480][ext=mp4]/best[height<=480]/best",
 }
 
 AUDIO_QUALITIES = {

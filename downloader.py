@@ -148,6 +148,18 @@ def _apply_platform_overrides(opts, platform, cookie_file, for_mobile):
         }
 
     elif platform == "Instagram":
+        # Instagram serves single merged streams — NOT separate video+audio tracks.
+        # Forcing bestvideo+bestaudio fails because those streams don't exist.
+        # Override format to a single-stream selector regardless of quality choice.
+        quality = opts.get("format", "best")
+        # Map the quality selector to Instagram-compatible single-stream format
+        _insta_fmt_map = {
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best":            "best[ext=mp4]/best",
+            "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[height<=1080]/best": "best[height<=1080][ext=mp4]/best[height<=1080]/best",
+            "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[height<=720]/best":  "best[height<=720][ext=mp4]/best[height<=720]/best",
+            "bestvideo[ext=mp4][height<=480]+bestaudio[ext=m4a]/best[height<=480]/best":  "best[height<=480][ext=mp4]/best[height<=480]/best",
+        }
+        opts["format"] = _insta_fmt_map.get(quality, "best[ext=mp4]/best")
         opts["http_headers"] = {
             "User-Agent": CHROME_UA,
             "Accept": "*/*",
@@ -160,8 +172,11 @@ def _apply_platform_overrides(opts, platform, cookie_file, for_mobile):
             "Origin": "https://www.instagram.com",
         }
         opts["extractor_args"] = {"instagram": {"include_dash_manifest": ["0"]}}
+        # Allow session cookies from browser as fallback
         if not cookie_file:
-            logger.warning("Instagram download attempted without cookies — may fail")
+            logger.warning("Instagram download attempted without cookies — login-required posts will fail")
+        else:
+            logger.debug(f"Instagram: using cookie file {cookie_file}")
 
     elif platform == "TikTok":
         opts["user_agent"] = CHROME_UA

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/download_task.dart';
-import '../services/api_client.dart';
 import '../services/app_state.dart';
 import 'home_screen.dart';
 
@@ -23,57 +22,82 @@ class DownloadProgressScreen extends StatefulWidget {
       _DownloadProgressScreenState();
 }
 
-class _DownloadProgressScreenState extends State<DownloadProgressScreen> {
+class _DownloadProgressScreenState extends State<DownloadProgressScreen>
+    with TickerProviderStateMixin {
   Timer? _pollTimer;
   DownloadTask? _currentTask;
   bool _isSaving = false;
   String? _savedPath;
+  DateTime? _downloadStarted;
+
+  // Success animation controller
+  late final AnimationController _successCtrl;
+  late final Animation<double> _successScale;
 
   @override
   void initState() {
     super.initState();
     _currentTask = widget.task;
+    _downloadStarted = DateTime.now();
     _startPolling();
+
+    _successCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _successScale = CurvedAnimation(
+      parent: _successCtrl,
+      curve: Curves.elasticOut,
+    );
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _successCtrl.dispose();
+    super.dispose();
   }
 
   void _startPolling() {
-    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollStatus());
+    _pollTimer =
+        Timer.periodic(const Duration(seconds: 2), (_) => _pollStatus());
   }
 
   Future<void> _pollStatus() async {
     try {
-      final api = context.read<ApiClient>();
+      // ✅ FIX: access ApiClient through AppState — it's not provided separately
+      final api = context.read<AppState>().client;
       final updated = await api.getDownloadStatus(
         widget.taskId,
         url: widget.task.url,
       );
       if (!mounted) return;
 
+      final wasNotCompleted =
+          _currentTask?.status != DownloadStatus.completed;
       setState(() => _currentTask = updated);
+      context.read<AppState>().updateDownload(widget.taskId, updated);
 
-      // Update the provider list
-      context
-          .read<AppState>()
-          .updateDownload(widget.taskId, updated);
-
-      // Stop polling on terminal states
       if (updated.status == DownloadStatus.completed ||
           updated.status == DownloadStatus.failed) {
         _pollTimer?.cancel();
+        if (wasNotCompleted &&
+            updated.status == DownloadStatus.completed) {
+          _successCtrl.forward();
+        }
       }
     } catch (_) {
-      // Polling error — just retry next cycle
+      // Polling error — retry next cycle
     }
   }
 
   Future<void> _saveToDevice() async {
     setState(() => _isSaving = true);
     try {
-      final api = context.read<ApiClient>();
+      final api = context.read<AppState>().client;
       final path = await api.downloadFile(widget.taskId);
       if (!mounted) return;
 
-      // Store the path in the download task so the downloads screen can share it
       final task = _currentTask;
       if (task != null) {
         task.localPath = path;
@@ -97,13 +121,13 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen> {
     }
   }
 
-  Future<void> _shareFile(
-      BuildContext context, String filePath, String title) async {
+  Future<void> _shareFile(String filePath, String title) async {
     final file = File(filePath);
     if (!file.existsSync()) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('❌ File not found'),
+          content: Text('❌ File not found on device'),
           backgroundColor: Color(0xFFC62828),
         ),
       );
@@ -120,116 +144,136 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('❌ Share failed: ${e.toString()}'),
-          backgroundColor: Color(0xFFC62828),
+          backgroundColor: const Color(0xFFC62828),
         ),
       );
     }
   }
 
-  @override
-  void dispose() {
-    _pollTimer?.cancel();
-    super.dispose();
+  String get _elapsedTime {
+    if (_downloadStarted == null) return '';
+    final elapsed =
+        DateTime.now().difference(_downloadStarted!).inSeconds;
+    if (elapsed < 60) return '${elapsed}s';
+    return '${elapsed ~/ 60}m ${elapsed % 60}s';
   }
 
   @override
   Widget build(BuildContext context) {
     final task = _currentTask;
-    if (task == null) return const SizedBox.shrink();
+    if (task == null) return const Scaffold();
 
     final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Download'),
+        title: const Text('Downloading'),
         centerTitle: true,
         automaticallyImplyLeading: false,
       ),
       body: Center(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(28),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               // ── Status icon ──────────────────────────────
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 400),
-                child: _buildStatusIcon(task, theme),
+              _buildStatusWidget(task, theme, primary),
+
+              const SizedBox(height: 28),
+
+              // ── Title ────────────────────────────────────
+              Text(
+                task.title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 6),
+              Text(
+                '${task.icon ?? ''} ${task.platform} · ${task.format.toUpperCase()} · ${task.quality}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
 
-              // ── Progress bar ─────────────────────────────
+              // ── Progress / status area ───────────────────
               if (task.status == DownloadStatus.downloading ||
                   task.status == DownloadStatus.pending) ...[
+                const SizedBox(height: 28),
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(10),
                   child: LinearProgressIndicator(
-                    value: task.progress / 100,
-                    minHeight: 12,
-                    backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                    value: task.status == DownloadStatus.pending
+                        ? null
+                        : task.progress / 100,
+                    minHeight: 10,
+                    backgroundColor:
+                        Colors.white.withValues(alpha: 0.08),
+                    valueColor: AlwaysStoppedAnimation<Color>(primary),
                   ),
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  '${task.progress}%',
-                  style: theme.textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary,
-                  ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      task.status == DownloadStatus.pending
+                          ? 'Starting...'
+                          : '${task.progress}%',
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: primary,
+                      ),
+                    ),
+                    Text(
+                      _elapsedTime,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                if (task.progress > 0)
+                if (task.fileSizeStr != null) ...[
+                  const SizedBox(height: 6),
                   Text(
-                    'Downloading from ${task.platform}...',
-                    style: theme.textTheme.bodyMedium?.copyWith(
+                    '📦 ${task.fileSizeStr}',
+                    style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
+                ],
               ],
 
+              // ── Completed ────────────────────────────────
               if (task.status == DownloadStatus.completed) ...[
-                const SizedBox(height: 8),
-                Text(
-                  task.title,
-                  style: theme.textTheme.titleMedium,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (task.fileSizeStr != null) ...[
-                  const SizedBox(height: 4),
+                const SizedBox(height: 24),
+                if (task.fileSizeStr != null)
                   Text(
                     '📦 ${task.fileSizeStr}',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                ],
                 const SizedBox(height: 24),
-
                 if (_savedPath != null) ...[
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.check_circle, color: Colors.green),
-                      title: const Text('Saved to device'),
-                      subtitle: Text(
-                        _savedPath!.split('/').last,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.share, color: Colors.blue),
-                        onPressed: () => _shareFile(context, _savedPath!, task.title),
-                        tooltip: 'Share',
-                      ),
-                    ),
+                  _SavedCard(
+                    path: _savedPath!,
+                    onShare: () =>
+                        _shareFile(_savedPath!, task.title),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: () => Navigator.pushAndRemoveUntil(
+                          onPressed: () =>
+                              Navigator.pushAndRemoveUntil(
                             context,
                             MaterialPageRoute(
                                 builder: (_) => const HomeScreen()),
@@ -243,7 +287,7 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen> {
                       Expanded(
                         child: FilledButton.icon(
                           onPressed: () =>
-                              _shareFile(context, _savedPath!, task.title),
+                              _shareFile(_savedPath!, task.title),
                           icon: const Icon(Icons.share),
                           label: const Text('Share'),
                         ),
@@ -253,7 +297,7 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen> {
                 ] else ...[
                   SizedBox(
                     width: double.infinity,
-                    height: 50,
+                    height: 52,
                     child: FilledButton.icon(
                       onPressed: _isSaving ? null : _saveToDevice,
                       icon: _isSaving
@@ -261,21 +305,34 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen> {
                               width: 20,
                               height: 20,
                               child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
+                                  strokeWidth: 2,
+                                  color: Colors.white),
                             )
-                          : const Icon(Icons.download),
-                      label: Text(_isSaving ? 'Saving...' : 'Save to Device'),
+                          : const Icon(Icons.download_rounded),
+                      label:
+                          Text(_isSaving ? 'Saving...' : 'Save to Device'),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const HomeScreen()),
+                      (route) => false,
+                    ),
+                    icon: const Icon(Icons.home_outlined),
+                    label: const Text('Back to Home'),
                   ),
                 ],
               ],
 
+              // ── Failed ───────────────────────────────────
               if (task.status == DownloadStatus.failed) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 16),
                 Card(
-                  color: theme.colorScheme.errorContainer,
+                  color: theme.colorScheme.errorContainer
+                      .withValues(alpha: 0.5),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Row(
@@ -298,7 +355,8 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen> {
                 OutlinedButton.icon(
                   onPressed: () => Navigator.pushAndRemoveUntil(
                     context,
-                    MaterialPageRoute(builder: (_) => const HomeScreen()),
+                    MaterialPageRoute(
+                        builder: (_) => const HomeScreen()),
                     (route) => false,
                   ),
                   icon: const Icon(Icons.home_outlined),
@@ -312,41 +370,129 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen> {
     );
   }
 
-  Widget _buildStatusIcon(DownloadTask task, ThemeData theme) {
+  Widget _buildStatusWidget(
+      DownloadTask task, ThemeData theme, Color primary) {
     switch (task.status) {
       case DownloadStatus.pending:
-        return const SizedBox(
-          width: 80,
-          height: 80,
-          child: CircularProgressIndicator(strokeWidth: 4),
+        return SizedBox(
+          width: 90,
+          height: 90,
+          child: CircularProgressIndicator(
+            strokeWidth: 4,
+            color: primary,
+          ),
         );
+
       case DownloadStatus.downloading:
         return SizedBox(
-          width: 80,
-          height: 80,
+          width: 90,
+          height: 90,
           child: Stack(
             alignment: Alignment.center,
             children: [
               SizedBox(
-                width: 80,
-                height: 80,
+                width: 90,
+                height: 90,
                 child: CircularProgressIndicator(
                   value: task.progress / 100,
-                  strokeWidth: 5,
+                  strokeWidth: 6,
+                  color: primary,
+                  backgroundColor: Colors.white.withValues(alpha: 0.1),
                 ),
               ),
-              Text(
-                '${task.progress}%',
-                style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.bold),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${task.progress}',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: primary,
+                    ),
+                  ),
+                  Text(
+                    '%',
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: primary),
+                  ),
+                ],
               ),
             ],
           ),
         );
+
       case DownloadStatus.completed:
-        return const Icon(Icons.check_circle, size: 80, color: Colors.green);
+        return ScaleTransition(
+          scale: _successScale,
+          child: Container(
+            width: 90,
+            height: 90,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.green.withValues(alpha: 0.15),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.green.withValues(alpha: 0.4),
+                  blurRadius: 24,
+                  spreadRadius: 4,
+                ),
+              ],
+            ),
+            child: const Icon(Icons.check_rounded,
+                size: 52, color: Colors.green),
+          ),
+        );
+
       case DownloadStatus.failed:
-        return const Icon(Icons.error, size: 80, color: Colors.red);
+        return Container(
+          width: 90,
+          height: 90,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.red.withValues(alpha: 0.15),
+          ),
+          child: const Icon(Icons.error_rounded,
+              size: 52, color: Colors.red),
+        );
     }
+  }
+}
+
+// ── Saved card ────────────────────────────────────────────
+class _SavedCard extends StatelessWidget {
+  final String path;
+  final VoidCallback onShare;
+
+  const _SavedCard({required this.path, required this.onShare});
+
+  @override
+  Widget build(BuildContext context) {
+    final filename = path.split('/').last;
+    return Card(
+      child: ListTile(
+        leading: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.green.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.check_rounded,
+              color: Colors.green, size: 22),
+        ),
+        title: const Text('Saved to device',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+        subtitle: Text(
+          filename,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 12),
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.share, color: Colors.blue),
+          onPressed: onShare,
+          tooltip: 'Share',
+        ),
+      ),
+    );
   }
 }

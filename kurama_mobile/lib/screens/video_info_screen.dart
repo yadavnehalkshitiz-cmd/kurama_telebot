@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/video_info.dart';
 import '../models/download_task.dart';
-import '../services/api_client.dart';
 import '../services/app_state.dart';
 import '../widgets/platform_badge.dart';
 import 'download_progress_screen.dart';
@@ -21,16 +20,31 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
   String _selectedVideoQuality = 'best';
   String _selectedAudioQuality = 'best';
 
+  static const _videoQualities = [
+    ('best', '🎯 Best'),
+    ('1080p', '1080p FHD'),
+    ('720p', '720p HD'),
+    ('480p', '480p SD'),
+  ];
+
+  static const _audioQualities = [
+    ('best', '🎯 Best'),
+    ('320k', '320 kbps'),
+    ('192k', '192 kbps'),
+    ('128k', '128 kbps'),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final info = widget.info;
     final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(
           '${info.icon} ${info.platform}',
-          style: const TextStyle(fontSize: 16),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
         centerTitle: true,
       ),
@@ -41,30 +55,22 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
             // ── Thumbnail ──────────────────────────────────
             if (info.thumbnail != null)
               ClipRRect(
-                borderRadius:
-                    const BorderRadius.vertical(bottom: Radius.circular(16)),
+                borderRadius: const BorderRadius.vertical(
+                    bottom: Radius.circular(20)),
                 child: Image.network(
                   info.thumbnail!,
                   width: double.infinity,
                   height: 220,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
-                    height: 140,
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    child: const Center(
-                      child: Icon(Icons.movie_outlined, size: 48),
-                    ),
-                  ),
+                  loadingBuilder: (_, child, progress) {
+                    if (progress == null) return child;
+                    return _ThumbnailShimmer(height: 220);
+                  },
+                  errorBuilder: (_, __, ___) => _ThumbnailPlaceholder(height: 140),
                 ),
               )
             else
-              Container(
-                height: 120,
-                color: theme.colorScheme.surfaceContainerHighest,
-                child: const Center(
-                  child: Icon(Icons.movie_outlined, size: 48),
-                ),
-              ),
+              _ThumbnailPlaceholder(height: 140),
 
             Padding(
               padding: const EdgeInsets.all(20),
@@ -80,6 +86,7 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                     info.title,
                     style: theme.textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.bold,
+                      height: 1.3,
                     ),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
@@ -94,78 +101,113 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                   const SizedBox(height: 16),
 
                   // ── Stats row ────────────────────────────
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
-                      _buildStatChip(Icons.timer_outlined, info.durationStr),
-                      const SizedBox(width: 8),
-                      _buildStatChip(Icons.storage_outlined, info.filesizeStr),
-                      if (info.views != null) ...[
-                        const SizedBox(width: 8),
-                        _buildStatChip(
-                            Icons.visibility_outlined, '${info.views} views'),
-                      ],
+                      _StatChip(Icons.timer_outlined, info.durationStr),
+                      _StatChip(Icons.storage_outlined, info.filesizeStr),
+                      if (info.views != null)
+                        _StatChip(Icons.visibility_outlined,
+                            '${_formatViews(info.views!)} views'),
+                      if (info.uploadDate != null)
+                        _StatChip(Icons.calendar_today_outlined,
+                            info.uploadDate!),
                     ],
                   ),
 
-                  const Divider(height: 32),
+                  if (info.isPlaylist) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color: primary.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.playlist_play,
+                              size: 16, color: primary),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Playlist · ${info.playlistCount} videos',
+                            style: TextStyle(
+                                color: primary,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  const Divider(height: 36),
 
                   // ── Format selection ─────────────────────
-                  Text(
-                    'Format',
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w600),
-                  ),
+                  _SectionLabel('Format'),
                   const SizedBox(height: 10),
                   SegmentedButton<String>(
                     segments: const [
-                      ButtonSegment(value: 'video', label: Text('🎬 Video')),
-                      ButtonSegment(value: 'audio', label: Text('🎵 Audio')),
                       ButtonSegment(
-                          value: 'doc', label: Text('📄 File (no encode)')),
+                          value: 'video',
+                          icon: Icon(Icons.videocam_outlined, size: 16),
+                          label: Text('Video')),
+                      ButtonSegment(
+                          value: 'audio',
+                          icon: Icon(Icons.music_note_outlined, size: 16),
+                          label: Text('Audio')),
+                      ButtonSegment(
+                          value: 'doc',
+                          icon: Icon(Icons.folder_zip_outlined, size: 16),
+                          label: Text('Raw File')),
                     ],
                     selected: {_selectedFormat},
                     onSelectionChanged: (v) =>
                         setState(() => _selectedFormat = v.first),
+                    style: ButtonStyle(
+                      shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      )),
+                    ),
                   ),
+                  if (_selectedFormat == 'doc') ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '📄 Downloads the original file without re-encoding.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
 
                   const SizedBox(height: 24),
 
                   // ── Quality selection ────────────────────
                   if (_selectedFormat == 'video') ...[
-                    Text(
-                      'Video Quality',
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
-                    ),
+                    _SectionLabel('Video Quality'),
                     const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _qualityChip('best', '🎯 Best'),
-                        _qualityChip('1080p', '1080p'),
-                        _qualityChip('720p', '720p'),
-                        _qualityChip('480p', '480p'),
-                      ],
+                    _QualityGrid(
+                      qualities: _videoQualities,
+                      selected: _selectedVideoQuality,
+                      onSelect: (v) =>
+                          setState(() => _selectedVideoQuality = v),
+                      primary: primary,
                     ),
                   ],
 
                   if (_selectedFormat == 'audio') ...[
-                    Text(
-                      'Audio Bitrate',
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
-                    ),
+                    _SectionLabel('Audio Bitrate'),
                     const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _qualityChip('best', '🎯 Best'),
-                        _qualityChip('320k', '320kbps'),
-                        _qualityChip('192k', '192kbps'),
-                        _qualityChip('128k', '128kbps'),
-                      ],
+                    _QualityGrid(
+                      qualities: _audioQualities,
+                      selected: _selectedAudioQuality,
+                      onSelect: (v) =>
+                          setState(() => _selectedAudioQuality = v),
+                      primary: primary,
                     ),
                   ],
 
@@ -174,27 +216,28 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                   // ── Download button ──────────────────────
                   SizedBox(
                     width: double.infinity,
-                    height: 54,
+                    height: 56,
                     child: FilledButton.icon(
                       onPressed: _startDownload,
-                      icon: const Icon(Icons.download, size: 24),
+                      icon: const Icon(Icons.download_rounded, size: 22),
                       label: const Text(
-                        'Download',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                        'Start Download',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Center(
+                    child: Text(
+                      'Saved to device · Share from Downloads tab',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.6),
                       ),
                     ),
                   ),
                   const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: Text(
-                      'Downloads are saved to your device and can be shared from the Downloads tab.',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -204,49 +247,16 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
     );
   }
 
-  Widget _buildStatChip(IconData icon, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14),
-          const SizedBox(width: 4),
-          Text(text, style: const TextStyle(fontSize: 12)),
-        ],
-      ),
-    );
-  }
-
-  Widget _qualityChip(String value, String label) {
-    final isSelected = (_selectedFormat == 'audio'
-            ? _selectedAudioQuality
-            : _selectedVideoQuality) ==
-        value;
-    return ChoiceChip(
-      label: Text(label),
-      selected: isSelected,
-      onSelected: (_) {
-        setState(() {
-          if (_selectedFormat == 'audio') {
-            _selectedAudioQuality = value;
-          } else {
-            _selectedVideoQuality = value;
-          }
-        });
-      },
-    );
+  String _formatViews(int views) {
+    if (views >= 1000000) return '${(views / 1000000).toStringAsFixed(1)}M';
+    if (views >= 1000) return '${(views / 1000).toStringAsFixed(1)}K';
+    return views.toString();
   }
 
   Future<void> _startDownload() async {
     try {
-      final api = context.read<ApiClient>();
+      // ✅ FIX: access ApiClient through AppState — it's not provided separately
+      final api = context.read<AppState>().client;
       final taskId = await api.startDownload(
         url: widget.info.url,
         format: _selectedFormat,
@@ -254,7 +264,6 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
         audioQuality: _selectedAudioQuality,
       );
 
-      // Add to download list in app state
       final task = DownloadTask(
         taskId: taskId,
         url: widget.info.url,
@@ -272,10 +281,8 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => DownloadProgressScreen(
-            taskId: taskId,
-            task: task,
-          ),
+          builder: (_) =>
+              DownloadProgressScreen(taskId: taskId, task: task),
         ),
       );
     } catch (e) {
@@ -290,4 +297,131 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
   }
 }
 
+// ── Quality grid ──────────────────────────────────────────
+class _QualityGrid extends StatelessWidget {
+  final List<(String, String)> qualities;
+  final String selected;
+  final ValueChanged<String> onSelect;
+  final Color primary;
 
+  const _QualityGrid({
+    required this.qualities,
+    required this.selected,
+    required this.onSelect,
+    required this.primary,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: qualities.map((q) {
+        final (value, label) = q;
+        final isSelected = selected == value;
+        return GestureDetector(
+          onTap: () => onSelect(value),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? primary.withValues(alpha: 0.2)
+                  : Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected
+                    ? primary
+                    : Colors.white.withValues(alpha: 0.12),
+                width: isSelected ? 2 : 1,
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? primary : Colors.white70,
+                fontWeight:
+                    isSelected ? FontWeight.w700 : FontWeight.w500,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  const _SectionLabel(this.text);
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
+          ),
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _StatChip(this.icon, this.text);
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(8),
+        border:
+            Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: Colors.white54),
+          const SizedBox(width: 5),
+          Text(text,
+              style: const TextStyle(fontSize: 12, color: Colors.white70)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ThumbnailShimmer extends StatelessWidget {
+  final double height;
+  const _ThumbnailShimmer({required this.height});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: height,
+      color: Colors.white.withValues(alpha: 0.06),
+      child: const Center(
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+    );
+  }
+}
+
+class _ThumbnailPlaceholder extends StatelessWidget {
+  final double height;
+  const _ThumbnailPlaceholder({required this.height});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: height,
+      color: Colors.white.withValues(alpha: 0.04),
+      child: const Center(
+        child: Icon(Icons.movie_outlined, size: 48, color: Colors.white24),
+      ),
+    );
+  }
+}

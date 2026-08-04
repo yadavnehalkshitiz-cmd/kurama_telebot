@@ -671,17 +671,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Format selection ────────────────────────────────
     if data.startswith("fmt_"):
-        await _handle_format(query, chat_id, data)
+        await _handle_format(query, chat_id, data, context)
         return
 
     # ── Video quality selection ─────────────────────────
     if data.startswith("vq_"):
-        await _handle_video_quality(query, chat_id, data)
+        await _handle_video_quality(query, chat_id, data, context)
         return
 
     # ── Audio quality selection ─────────────────────────
     if data.startswith("aq_"):
-        await _handle_audio_quality(query, chat_id, data)
+        await _handle_audio_quality(query, chat_id, data, context)
         return
 
     # ── Destination selection ───────────────────────────
@@ -727,7 +727,7 @@ async def _handle_mkdir_yes(query, context, chat_id):
         await _safe_edit(query, f"❌ *Error:* `{str(e)[:200]}`")
 
 
-async def _handle_format(query, chat_id, data):
+async def _handle_format(query, chat_id, data, context):
     """User picked a format type (video / audio / doc / playlist)."""
     sess = sessions.get(chat_id)
     if not sess:
@@ -779,7 +779,7 @@ async def _show_audio_quality(query, chat_id):
     )
 
 
-async def _handle_video_quality(query, chat_id, data):
+async def _handle_video_quality(query, chat_id, data, context):
     sess = sessions.get(chat_id)
     if not sess:
         return
@@ -788,7 +788,7 @@ async def _handle_video_quality(query, chat_id, data):
     await _show_destination(query, chat_id, video=True, context=context)
 
 
-async def _handle_audio_quality(query, chat_id, data):
+async def _handle_audio_quality(query, chat_id, data, context):
     sess = sessions.get(chat_id)
     if not sess:
         return
@@ -863,20 +863,23 @@ async def _run_download(chat_id, query, context):
     if not sess:
         return
 
-    # ── Check billing / credits ─────────────────────────
-    if not user_config.is_subscription_active(chat_id) and user_config.get_user_credits(chat_id) <= 0:
-        await _safe_edit(
-            query,
-            "🔒 *Free Download Limit Reached!*\n\n"
-            "You have used all **3 free credits**.\n"
-            "Upgrade to **KuramaBot Premium** for only **500 NPR / month** to get unlimited downloads!",
-            reply_markup=buy_subscription_keyboard(),
-        )
-        _cleanup_session(chat_id)
-        return
+    is_admin = bool(config.ADMIN_CHAT_ID and chat_id == config.ADMIN_CHAT_ID)
 
-    # Deduct credit for free tier user
-    user_config.deduct_credit(chat_id)
+    # ── Check billing / credits (Admin is exempt) ───────
+    if not is_admin:
+        if not user_config.is_subscription_active(chat_id) and user_config.get_user_credits(chat_id) <= 0:
+            await _safe_edit(
+                query,
+                "🔒 *Free Download Limit Reached!*\n\n"
+                "You have used all **3 free credits**.\n"
+                "Upgrade to **KuramaBot Premium** for only **500 NPR / month** to get unlimited downloads!",
+                reply_markup=buy_subscription_keyboard(),
+            )
+            _cleanup_session(chat_id)
+            return
+
+        # Deduct credit for non-admin free tier user
+        user_config.deduct_credit(chat_id)
 
     async with _state_lock:
         active_downloads.add(chat_id)
@@ -956,7 +959,12 @@ async def _run_download(chat_id, query, context):
 
     # ── Post-download actions ───────────────────────────
     try:
-        await _handle_mobile_done(query, context, chat_id, title, filepath, icon, audio_only, send_as_doc)
+        if dest == "laptop":
+            await _handle_laptop_done(query, chat_id, title, filepath, file_size, audio_only)
+        elif dest == "both":
+            await _handle_both_done(query, context, chat_id, title, filepath, icon, audio_only, send_as_doc)
+        else:
+            await _handle_mobile_done(query, context, chat_id, title, filepath, icon, audio_only, send_as_doc)
     except Exception as e:
         logger.error(f"Post-download error: {e}")
         await edit_msg(f"⚠️ *Downloaded but error:* `{str(e)[:200]}`\n💾 File: `{filepath}`")
@@ -1003,14 +1011,19 @@ async def _handle_mobile_done(query, context, chat_id, title, filepath, icon, au
     _cleanup_session(chat_id)
 
 
-async def _handle_both_done(query, context, chat_id, title, filepath, icon):
+async def _handle_both_done(query, context, chat_id, title, filepath, icon, audio_only=False, send_as_doc=False):
     await _safe_edit(query,
-        f"✅ *Downloaded! Now sending to Telegram…*\n\n💾 Saved: `{filepath}`",
+        f"✅ *Saved to Laptop! Now sending to Telegram…*\n\n💾 `{filepath}`",
     )
     try:
-        await send_video(context, chat_id, filepath, title, icon)
+        if audio_only:
+            await send_audio(context, chat_id, filepath, title, icon)
+        elif send_as_doc:
+            await send_document(context, chat_id, filepath, title, icon)
+        else:
+            await send_video(context, chat_id, filepath, title, icon)
         await _safe_edit(query,
-            f"✅ *All done!*\n\n💻 `{filepath}`\n📱 Sent to Telegram above.",
+            f"✅ *All done!*\n\n💻 Saved: `{filepath}`\n📱 Sent to Telegram above.",
         )
     except Exception as e:
         logger.error(f"Telegram send failed for both-mode: {e}")
