@@ -33,10 +33,6 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Create Android platform runner
-        run: flutter create --platforms=android .
-        working-directory: ./kurama_mobile
-
       - name: Get dependencies
         run: flutter pub get
         working-directory: ./kurama_mobile
