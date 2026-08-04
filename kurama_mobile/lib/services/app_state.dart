@@ -7,10 +7,11 @@ import 'download_storage.dart';
 /// Automatically persists download history to device storage on every change.
 class AppState extends ChangeNotifier {
   final DownloadStorage _storage;
+  final int userId;
   ApiClient _client;
   final List<DownloadTask> _downloads = [];
 
-  AppState(this._storage, this._client) {
+  AppState(this._storage, this._client, {required this.userId}) {
     _loadPersistedState();
   }
 
@@ -56,6 +57,30 @@ class AppState extends ChangeNotifier {
   void removeDownload(String taskId) {
     _downloads.removeWhere((t) => t.taskId == taskId);
     _persistDownloads();
+    notifyListeners();
+  }
+
+  Future<void> moveToVault(String taskId, String vaultPath) async {
+    final idx = _downloads.indexWhere((task) => task.taskId == taskId);
+    if (idx < 0) return;
+    final task = _downloads[idx];
+    task
+      ..isPrivate = true
+      ..vaultPath = vaultPath
+      ..localPath = null;
+    await _persistDownloads();
+    notifyListeners();
+  }
+
+  Future<void> restoreFromVault(String taskId, String localPath) async {
+    final idx = _downloads.indexWhere((task) => task.taskId == taskId);
+    if (idx < 0) return;
+    final task = _downloads[idx];
+    task
+      ..isPrivate = false
+      ..vaultPath = null
+      ..localPath = localPath;
+    await _persistDownloads();
     notifyListeners();
   }
 

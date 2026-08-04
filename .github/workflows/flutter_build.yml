@@ -41,6 +41,14 @@ jobs:
         run: flutter pub get
         working-directory: ./kurama_mobile
 
+      - name: Run Flutter tests
+        run: flutter test
+        working-directory: ./kurama_mobile
+
+      - name: Analyze Flutter app
+        run: flutter analyze --no-fatal-infos
+        working-directory: ./kurama_mobile
+
       - name: Build Android APK
         run: flutter build apk --release --no-tree-shake-icons
         working-directory: ./kurama_mobile

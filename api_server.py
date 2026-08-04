@@ -19,7 +19,7 @@ import shutil
 import logging
 import threading
 
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
@@ -33,6 +33,10 @@ from config import (
     ALLOWED_ORIGINS,
     MAX_URL_LENGTH,
     TASK_TTL,
+    MONTHLY_SUB_PRICE_NPR,
+    ESEWA_ID,
+    KHALTI_ID,
+    BANK_DETAILS,
 )
 from downloader import build_ydl_opts, fetch_info, download_single
 from utils import get_platform, human_size, human_duration, clean_md
@@ -96,6 +100,7 @@ class FetchRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     url: str
+    user_id: int
     format: str = "video"  # video | audio | doc
     video_quality: str = "best"
     audio_quality: str = "best"
@@ -115,6 +120,13 @@ class DownloadRequest(BaseModel):
     def validate_format(cls, v: str) -> str:
         if v not in ("video", "audio", "doc"):
             raise ValueError("format must be video, audio, or doc")
+        return v
+
+    @field_validator("user_id")
+    @classmethod
+    def validate_user_id(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("user_id must be positive")
         return v
 
 class DownloadResponse(BaseModel):
@@ -152,7 +164,35 @@ def _purge_expired_tasks():
         logger.info(f"[API] Purged {len(expired)} expired download tasks")
 
 
-def background_download(task_id: str, url: str, platform: str, ydl_opts: dict):
+def _download_progress_hook(task_id: str):
+    def update(data: dict):
+        if data.get("status") != "downloading":
+            return
+        total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+        downloaded = data.get("downloaded_bytes") or 0
+        progress = int(downloaded * 100 / total) if total else 0
+        speed = int(data.get("speed") or 0)
+        eta = data.get("eta")
+        with _tasks_lock:
+            task = download_tasks.get(task_id)
+            if task:
+                task.update({
+                    "progress": max(0, min(progress, 99)),
+                    "speed_bytes_per_second": speed,
+                    "speed_label": f"{human_size(speed)}/s" if speed else None,
+                    "eta_seconds": int(eta) if eta is not None else None,
+                })
+    return update
+
+
+def background_download(
+    task_id: str,
+    url: str,
+    platform: str,
+    ydl_opts: dict,
+    user_id: int,
+    credit_charged: bool,
+):
     """Run the actual yt-dlp download in a daemon thread."""
     with _tasks_lock:
         task = download_tasks.get(task_id)
@@ -169,6 +209,8 @@ def background_download(task_id: str, url: str, platform: str, ydl_opts: dict):
     except Exception as e:
         task["status"] = "failed"
         task["error"] = str(e)[:500]
+        if credit_charged:
+            user_config.refund_credit(user_id)
         logger.error(f"[API] Download task {task_id} failed: {e}")
 
 
@@ -239,6 +281,10 @@ def api_start_download(req: DownloadRequest, auth=Depends(verify_auth)):
     platform, _ = get_platform(url)
     task_id = str(uuid.uuid4())
 
+    allowed, credit_charged = user_config.consume_download_credit(req.user_id)
+    if not allowed:
+        raise HTTPException(402, "No download credits remaining")
+
     # Per-task temp folder (sandboxed under TEMP_FOLDER/mobile_api/)
     save_folder = os.path.join(TEMP_FOLDER, "mobile_api", task_id)
     os.makedirs(save_folder, exist_ok=True)
@@ -249,6 +295,7 @@ def api_start_download(req: DownloadRequest, auth=Depends(verify_auth)):
     ydl_opts = build_ydl_opts(
         save_folder=save_folder,
         platform=platform,
+        progress_hook=_download_progress_hook(task_id),
         for_mobile=True,
         audio_only=audio_only,
         send_as_doc=send_as_doc,
@@ -267,11 +314,16 @@ def api_start_download(req: DownloadRequest, auth=Depends(verify_auth)):
             "url": url,
             "title": None,
             "created_at": time.time(),
+            "format": req.format,
+            "user_id": req.user_id,
+            "speed_bytes_per_second": 0,
+            "speed_label": None,
+            "eta_seconds": None,
         }
 
     thread = threading.Thread(
         target=background_download,
-        args=(task_id, url, platform, ydl_opts),
+        args=(task_id, url, platform, ydl_opts, req.user_id, credit_charged),
         daemon=True,
     )
     thread.start()
@@ -294,6 +346,10 @@ def api_download_status(task_id: str, auth=Depends(verify_auth)):
         "platform": task["platform"],
         "title": task.get("title"),
         "error": task.get("error"),
+        "format": task.get("format", "video"),
+        "speed_bytes_per_second": task.get("speed_bytes_per_second"),
+        "speed_label": task.get("speed_label"),
+        "eta_seconds": task.get("eta_seconds"),
     }
 
     if task["status"] == "completed":
@@ -353,8 +409,25 @@ def api_get_user_profile(user_id: int, auth=Depends(verify_auth)):
         "credits": credits,
         "is_subscription_active": is_sub,
         "subscription_expires_at": expiry,
-        "monthly_price_npr": 500
+        "monthly_price_npr": MONTHLY_SUB_PRICE_NPR,
+        "daily_reward": 2,
+        "payment_methods": {
+            "esewa": ESEWA_ID,
+            "khalti": KHALTI_ID,
+            "bank": BANK_DETAILS,
+        },
     }
+
+
+@app.post("/api/user/{user_id}/claim-daily")
+def api_claim_daily_reward(user_id: int, auth=Depends(verify_auth)):
+    result = user_config.claim_daily_reward(user_id)
+    if not result["claimed"]:
+        raise HTTPException(409, detail={
+            "message": "Daily reward already claimed",
+            **result,
+        })
+    return result
 
 @app.post("/api/user/submit_payment")
 def api_submit_payment(req: PaymentSubmitRequest, auth=Depends(verify_auth)):
@@ -366,6 +439,48 @@ def api_submit_payment(req: PaymentSubmitRequest, auth=Depends(verify_auth)):
         "user_id": req.user_id,
         "tx_id": req.tx_id,
         "message": "Payment submitted for admin review"
+    }
+
+
+@app.post("/api/user/submit-payment")
+async def api_submit_payment_receipt(
+    user_id: int = Form(...),
+    tx_id: str = Form(...),
+    method: str = Form(...),
+    receipt: UploadFile | None = File(None),
+    auth=Depends(verify_auth),
+):
+    transaction = tx_id.strip()
+    payment_method = method.strip().lower()
+    if not transaction:
+        raise HTTPException(400, "Transaction ID cannot be empty")
+    if payment_method not in {"esewa", "khalti", "bank"}:
+        raise HTTPException(400, "Unsupported payment method")
+    receipt_path = None
+    if receipt is not None:
+        extension = os.path.splitext(receipt.filename or "")[1].lower()
+        if extension not in {".jpg", ".jpeg", ".png", ".pdf"}:
+            raise HTTPException(400, "Receipt must be JPG, PNG, or PDF")
+        contents = await receipt.read(5 * 1024 * 1024 + 1)
+        if len(contents) > 5 * 1024 * 1024:
+            raise HTTPException(413, "Receipt must be 5 MB or smaller")
+        receipt_dir = os.path.join(TEMP_FOLDER, "payment_receipts")
+        os.makedirs(receipt_dir, exist_ok=True)
+        receipt_name = f"{user_id}_{uuid.uuid4().hex}{extension}"
+        receipt_path = os.path.join(receipt_dir, receipt_name)
+        with open(receipt_path, "wb") as receipt_file:
+            receipt_file.write(contents)
+    payment = user_config.add_pending_payment(
+        user_id,
+        transaction,
+        MONTHLY_SUB_PRICE_NPR,
+        method=payment_method,
+        receipt_path=receipt_path,
+    )
+    return {
+        "status": "submitted",
+        "message": "Payment submitted for admin review",
+        "payment": payment,
     }
 
 

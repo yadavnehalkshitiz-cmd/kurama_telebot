@@ -248,6 +248,15 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
                     ),
                   ),
                 ],
+                if (task.speedLabel != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    '${task.speedLabel}${task.etaSeconds == null ? '' : ' • ${task.etaSeconds}s left'}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ],
 
               // ── Completed ────────────────────────────────

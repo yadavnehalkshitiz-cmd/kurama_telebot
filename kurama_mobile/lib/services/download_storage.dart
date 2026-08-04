@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/download_task.dart';
 
@@ -6,6 +7,7 @@ import '../models/download_task.dart';
 const _kDownloadHistory = 'download_history';
 const _kServerUrl = 'server_url';
 const _kApiKey = 'api_key';
+const _kInstallationUserId = 'installation_user_id';
 
 /// Persists download history and server config to device storage.
 class DownloadStorage {
@@ -47,5 +49,13 @@ class DownloadStorage {
   Future<void> clearServerConfig() async {
     await _prefs.remove(_kServerUrl);
     await _prefs.remove(_kApiKey);
+  }
+
+  Future<int> loadOrCreateUserId() async {
+    final existing = _prefs.getInt(_kInstallationUserId);
+    if (existing != null && existing > 0) return existing;
+    final created = Random.secure().nextInt(0x7ffffffe) + 1;
+    await _prefs.setInt(_kInstallationUserId, created);
+    return created;
   }
 }

@@ -10,6 +10,7 @@ from config import USER_CONFIGS_FILE, INITIAL_FREE_CREDITS
 # Threading lock for atomic read/write of the config file.
 # Safe for single-process multi-threaded access (asyncio.to_thread, daemon threads).
 _file_lock = threading.Lock()
+_state_lock = threading.RLock()
 
 
 def load():
@@ -117,6 +118,9 @@ def _ensure_user_profile(chat_id: int) -> dict:
     if "pending_payments" not in cfg:
         cfg["pending_payments"] = []
         changed = True
+    if "last_daily_claim_at" not in cfg:
+        cfg["last_daily_claim_at"] = None
+        changed = True
 
     if changed:
         save(_configs)
@@ -166,6 +170,65 @@ def deduct_credit(chat_id: int) -> bool:
     return False
 
 
+def consume_download_credit(chat_id: int) -> tuple[bool, bool]:
+    """Atomically authorize a download and report whether a credit was charged."""
+    with _state_lock:
+        if is_subscription_active(chat_id):
+            return True, False
+        cfg = _ensure_user_profile(chat_id)
+        credits = int(cfg.get("credits", 0))
+        if credits <= 0:
+            return False, False
+        cfg["credits"] = credits - 1
+        save(_configs)
+        return True, True
+
+
+def refund_credit(chat_id: int) -> int:
+    """Refund one credit after a server-side download failure."""
+    with _state_lock:
+        cfg = _ensure_user_profile(chat_id)
+        cfg["credits"] = int(cfg.get("credits", 0)) + 1
+        save(_configs)
+        return cfg["credits"]
+
+
+def claim_daily_reward(
+    chat_id: int,
+    *,
+    now: datetime | None = None,
+    amount: int = 2,
+) -> dict:
+    """Grant a rolling 24-hour reward exactly once per eligibility window."""
+    with _state_lock:
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        cfg = _ensure_user_profile(chat_id)
+        last_value = cfg.get("last_daily_claim_at")
+        if last_value:
+            try:
+                last = datetime.fromisoformat(last_value)
+                next_claim = last + timedelta(hours=24)
+                if current < next_claim:
+                    return {
+                        "claimed": False,
+                        "credits": int(cfg.get("credits", 0)),
+                        "next_claim_at": next_claim.isoformat(),
+                    }
+            except (TypeError, ValueError):
+                pass
+        cfg["credits"] = int(cfg.get("credits", 0)) + amount
+        cfg["last_daily_claim_at"] = current.isoformat()
+        save(_configs)
+        return {
+            "claimed": True,
+            "reward": amount,
+            "credits": cfg["credits"],
+            "next_claim_at": (current + timedelta(hours=24)).isoformat(),
+        }
+
+
 def grant_subscription(chat_id: int, days: int = 30):
     """Grant or extend a user's premium subscription by `days` days."""
     cfg = _ensure_user_profile(chat_id)
@@ -189,14 +252,23 @@ def grant_subscription(chat_id: int, days: int = 30):
     return new_expiry.isoformat()
 
 
-def add_pending_payment(chat_id: int, tx_id: str, amount: int = 500) -> dict:
+def add_pending_payment(
+    chat_id: int,
+    tx_id: str,
+    amount: int = 500,
+    *,
+    method: str = "other",
+    receipt_path: str | None = None,
+) -> dict:
     """Record a pending payment for admin review."""
     cfg = _ensure_user_profile(chat_id)
     payment = {
         "tx_id": tx_id.strip(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "amount": amount,
-        "status": "PENDING"
+        "status": "PENDING",
+        "method": method,
+        "receipt_path": receipt_path,
     }
     cfg["pending_payments"].append(payment)
     save(_configs)
