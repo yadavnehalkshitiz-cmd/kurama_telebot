@@ -44,6 +44,27 @@ class FlutterWorkflowTests(unittest.TestCase):
             workflow,
         )
 
+    def test_workflow_uses_node24_compatible_action_versions(self):
+        workflow = self.workflow_text()
+
+        for action in (
+            "actions/checkout@v7",
+            "actions/setup-java@v5",
+            "actions/upload-artifact@v7",
+            "actions/download-artifact@v8",
+            "softprops/action-gh-release@v3",
+        ):
+            self.assertIn(action, workflow)
+
+        for deprecated_action in (
+            "actions/checkout@v4",
+            "actions/setup-java@v4",
+            "actions/upload-artifact@v4",
+            "actions/download-artifact@v4",
+            "softprops/action-gh-release@v2",
+        ):
+            self.assertNotIn(deprecated_action, workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
