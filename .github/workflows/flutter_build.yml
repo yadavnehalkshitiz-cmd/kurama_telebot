@@ -33,6 +33,47 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Validate Android release signing secrets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=0
+          for name in \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD
+          do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required GitHub Actions secret: ${name}"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Configure Android release signing
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        working-directory: ./kurama_mobile/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > app/kuramabot-release.jks
+          printf '%s\n' \
+            'storeFile=kuramabot-release.jks' \
+            "storePassword=$ANDROID_KEYSTORE_PASSWORD" \
+            "keyAlias=$ANDROID_KEY_ALIAS" \
+            "keyPassword=$ANDROID_KEY_PASSWORD" \
+            > key.properties
+
       - name: Get dependencies
         run: flutter pub get
         working-directory: ./kurama_mobile
@@ -56,6 +97,12 @@ jobs:
           name: KuramaBot-Android-APK
           path: kurama_mobile/build/app/outputs/flutter-apk/app-release.apk
           retention-days: 30
+
+      - name: Remove Android signing material
+        if: always()
+        shell: bash
+        working-directory: ./kurama_mobile
+        run: rm -f android/app/kuramabot-release.jks android/key.properties
 
   # ────────────────────────────────────────────────────────
   # 2. BUILD WINDOWS EXE
