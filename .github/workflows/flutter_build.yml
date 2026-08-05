@@ -62,7 +62,7 @@ jobs:
   # ────────────────────────────────────────────────────────
   build_windows:
     name: Build Windows Executable
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout repository
