@@ -19,10 +19,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -33,12 +33,57 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Create Android platform runner
-        run: flutter create --platforms=android .
-        working-directory: ./kurama_mobile
+      - name: Validate Android release signing secrets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=0
+          for name in \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD
+          do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required GitHub Actions secret: ${name}"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Configure Android release signing
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        working-directory: ./kurama_mobile/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > app/kuramabot-release.jks
+          printf '%s\n' \
+            'storeFile=kuramabot-release.jks' \
+            "storePassword=$ANDROID_KEYSTORE_PASSWORD" \
+            "keyAlias=$ANDROID_KEY_ALIAS" \
+            "keyPassword=$ANDROID_KEY_PASSWORD" \
+            > key.properties
 
       - name: Get dependencies
         run: flutter pub get
+        working-directory: ./kurama_mobile
+
+      - name: Run Flutter tests
+        run: flutter test
+        working-directory: ./kurama_mobile
+
+      - name: Analyze Flutter app
+        run: flutter analyze --no-fatal-infos
         working-directory: ./kurama_mobile
 
       - name: Build Android APK
@@ -47,22 +92,28 @@ jobs:
 
       # Always save artifact (useful for non-release pushes)
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: KuramaBot-Android-APK
           path: kurama_mobile/build/app/outputs/flutter-apk/app-release.apk
           retention-days: 30
+
+      - name: Remove Android signing material
+        if: always()
+        shell: bash
+        working-directory: ./kurama_mobile
+        run: rm -f android/app/kuramabot-release.jks android/key.properties
 
   # ────────────────────────────────────────────────────────
   # 2. BUILD WINDOWS EXE
   # ────────────────────────────────────────────────────────
   build_windows:
     name: Build Windows Executable
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -89,7 +140,7 @@ jobs:
         run: Compress-Archive -Path kurama_mobile/build/windows/x64/runner/Release/* -DestinationPath KuramaBot-Windows.zip
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: KuramaBot-Windows-App
           path: KuramaBot-Windows.zip
@@ -109,13 +160,13 @@ jobs:
 
     steps:
       - name: Download Android APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: KuramaBot-Android-APK
           path: ./release
 
       - name: Download Windows App
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: KuramaBot-Windows-App
           path: ./release
@@ -124,7 +175,7 @@ jobs:
         run: mv ./release/app-release.apk ./release/KuramaBot-${{ github.ref_name }}.apk
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: "🦊 KuramaBot ${{ github.ref_name }}"
           body: |

@@ -1,9 +1,14 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/download_task.dart';
 import '../services/app_state.dart';
+import '../services/vault_cipher.dart';
+import '../services/vault_key_store.dart';
+import '../services/vault_service.dart';
+import 'player_screen.dart';
 import 'package:intl/intl.dart';
 
 class DownloadsScreen extends StatelessWidget {
@@ -11,10 +16,12 @@ class DownloadsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final downloads = context.watch<AppState>().downloads;
+    final downloads = context
+        .watch<AppState>()
+        .downloads
+        .where((task) => !task.isPrivate)
+        .toList();
     final failedCount = downloads.where((t) => t.status == DownloadStatus.failed).length;
-    final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -100,8 +107,6 @@ class _DownloadCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     final (statusColor, statusIcon) = switch (task.status) {
       DownloadStatus.completed => (const Color(0xFF4CAF50), Icons.check_circle),
       DownloadStatus.failed => (const Color(0xFFEF5350), Icons.error),
@@ -207,11 +212,16 @@ class _DownloadCard extends StatelessWidget {
 
   Widget _buildTrailing(BuildContext context, Color statusColor) {
     if (task.status == DownloadStatus.completed) {
-      return IconButton(
-        icon: const Icon(Icons.share),
-        color: Colors.blue,
-        onPressed: () => _shareFile(context, task),
-        tooltip: 'Share',
+      return PopupMenuButton<String>(
+        tooltip: 'Media actions',
+        onSelected: (action) => _handleAction(context, action),
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'play', child: Text('Play offline')),
+          PopupMenuItem(value: 'share', child: Text('Share')),
+          PopupMenuItem(value: 'vault', child: Text('Move to private vault')),
+          PopupMenuDivider(),
+          PopupMenuItem(value: 'delete', child: Text('Delete')),
+        ],
       );
     }
     if (task.status == DownloadStatus.failed) {
@@ -232,6 +242,130 @@ class _DownloadCard extends StatelessWidget {
         color: statusColor,
       ),
     );
+  }
+
+  Future<void> _handleAction(BuildContext context, String action) async {
+    if (action == 'share') return _shareFile(context, task);
+    if (action == 'play') {
+      final path = task.localPath;
+      if (path == null || !File(path).existsSync()) {
+        _message(context, 'File not found on this device');
+        return;
+      }
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PlayerScreen(
+            filePath: path,
+            title: task.title,
+            format: task.format,
+          ),
+        ),
+      );
+      return;
+    }
+    if (action == 'vault') {
+      try {
+        final keys = VaultKeyStore(FlutterSecureSecretStore());
+        if (!await keys.hasPin()) {
+          if (!context.mounted || !await _createVaultPin(context, keys)) return;
+        }
+        final vault = VaultService(
+          VaultCipher(),
+          keys,
+        );
+        final path = await vault.protect(task);
+        if (!context.mounted) return;
+        await context.read<AppState>().moveToVault(task.taskId, path);
+        if (context.mounted) _message(context, 'Encrypted and moved to vault');
+      } catch (error) {
+        if (context.mounted) _message(context, 'Vault move failed: $error');
+      }
+      return;
+    }
+    if (action == 'delete') {
+      final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Delete download?'),
+              content: const Text('This removes the local file and history entry.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Delete'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!confirmed || !context.mounted) return;
+      final path = task.localPath;
+      if (path != null) {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      }
+      if (context.mounted) context.read<AppState>().removeDownload(task.taskId);
+    }
+  }
+
+  Future<bool> _createVaultPin(
+    BuildContext context,
+    VaultKeyStore keys,
+  ) async {
+    Future<String?> ask(String title) async {
+      final controller = TextEditingController();
+      final value = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: Text(title),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(labelText: '6-digit PIN'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      controller.dispose();
+      return value;
+    }
+
+    final first = await ask('Create vault PIN');
+    if (first == null || !context.mounted) return false;
+    final confirmation = await ask('Confirm vault PIN');
+    if (confirmation != first) {
+      if (context.mounted) _message(context, 'PINs did not match');
+      return false;
+    }
+    try {
+      await keys.setPin(first);
+      return true;
+    } on ArgumentError {
+      if (context.mounted) _message(context, 'Use exactly six digits');
+      return false;
+    }
+  }
+
+  void _message(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _shareFile(BuildContext context, DownloadTask task) async {

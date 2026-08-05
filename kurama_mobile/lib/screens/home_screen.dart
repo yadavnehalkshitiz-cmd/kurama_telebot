@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import '../services/app_state.dart';
 import '../services/api_client.dart';
 import '../widgets/connection_banner.dart';
@@ -19,19 +21,68 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLoading = false;
   bool _isConnected = false;
   bool _checkingConnection = true;
+  StreamSubscription? _intentSubscription;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _checkConnection();
+    _initShareIntentListener();
   }
 
   @override
   void dispose() {
+    _intentSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _urlController.dispose();
     super.dispose();
+  }
+
+  /// Listen for shared video links from external apps (YouTube, TikTok, Instagram, Twitter, etc.)
+  void _initShareIntentListener() {
+    try {
+      // Shared text/links while app is running
+      _intentSubscription =
+          ReceiveSharingIntent.instance.getMediaStream().listen((value) {
+        if (value.isNotEmpty) {
+          for (var file in value) {
+            _handleSharedUrl(file.path);
+          }
+        }
+      }, onError: (err) {
+        debugPrint('Share intent stream error: $err');
+      });
+
+      // Shared text/links when app is opened from closed state
+      ReceiveSharingIntent.instance.getInitialMedia().then((value) {
+        if (value.isNotEmpty) {
+          for (var file in value) {
+            _handleSharedUrl(file.path);
+          }
+        }
+      }).catchError((err) {
+        debugPrint('Share intent initial media error: $err');
+      });
+    } catch (e) {
+      debugPrint('ReceiveSharingIntent not supported on this platform: $e');
+    }
+  }
+
+  void _handleSharedUrl(String text) {
+    final extractedUrl = _extractFirstUrl(text);
+    if (extractedUrl != null && extractedUrl.isNotEmpty) {
+      if (mounted) {
+        setState(() => _urlController.text = extractedUrl);
+        _fetchInfo();
+      }
+    }
+  }
+
+  String? _extractFirstUrl(String text) {
+    final exp = RegExp(r'https?://[^\s]+');
+    final match = exp.firstMatch(text);
+    return match?.group(0);
   }
 
   // Auto-paste from clipboard when app comes to foreground
@@ -45,9 +96,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _tryAutoFillFromClipboard() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text?.trim() ?? '';
-    if (text.startsWith('http://') || text.startsWith('https://')) {
+    final url = _extractFirstUrl(text);
+    if (url != null && url.isNotEmpty) {
       if (mounted && _urlController.text.isEmpty) {
-        setState(() => _urlController.text = text);
+        setState(() => _urlController.text = url);
       }
     }
   }
@@ -85,7 +137,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 controller: urlController,
                 decoration: const InputDecoration(
                   labelText: 'Server URL',
-                  hintText: 'http://192.168.1.100:8000',
+                  hintText: 'https://kurama-telebot.onrender.com',
                   prefixIcon: Icon(Icons.dns_outlined),
                 ),
                 keyboardType: TextInputType.url,
@@ -117,6 +169,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         apiKey: keyController.text.trim(),
                       );
                       final ok = await newClient.healthCheck();
+                      if (!mounted) return;
                       if (!ctx.mounted) return;
                       if (ok) {
                         context.read<AppState>().updateClient(newClient);
@@ -158,16 +211,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _pasteFromClipboard() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
-    if (data?.text != null && data!.text!.isNotEmpty) {
-      setState(() => _urlController.text = data.text!.trim());
+    if (!mounted) return;
+    final text = data?.text?.trim() ?? '';
+    final url = _extractFirstUrl(text);
+    if (url != null && url.isNotEmpty) {
+      setState(() => _urlController.text = url);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('📋 Pasted link from clipboard'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ No valid video link found in clipboard'),
+        ),
+      );
     }
   }
 
   Future<void> _fetchInfo() async {
-    final url = _urlController.text.trim();
+    final rawText = _urlController.text.trim();
+    final url = _extractFirstUrl(rawText) ?? rawText;
+
     if (url.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a URL')),
+        const SnackBar(content: Text('Please paste or enter a video URL')),
       );
       return;
     }
@@ -181,7 +251,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     setState(() => _isLoading = true);
     try {
-      // ✅ FIX: access ApiClient through AppState — it's not provided separately
       final api = context.read<AppState>().client;
       final info = await api.fetchInfo(url);
 
@@ -210,9 +279,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          '🦊 KuramaBot',
-          style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0.5),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.asset(
+                'assets/images/logo.png',
+                width: 26,
+                height: 26,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) =>
+                    const Text('🦊', style: TextStyle(fontSize: 20)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              'KuramaBot',
+              style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                  fontSize: 18),
+            ),
+          ],
         ),
         actions: [
           // Connection status dot
@@ -231,12 +320,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       shape: BoxShape.circle,
                       color: _isConnected
                           ? const Color(0xFF4CAF50)
-                          : const Color(0xFFEF5350),
+                          : const Color(0xFFFF8A65),
                       boxShadow: [
                         BoxShadow(
                           color: (_isConnected
                                   ? const Color(0xFF4CAF50)
-                                  : const Color(0xFFEF5350))
+                                  : const Color(0xFFFF8A65))
                               .withValues(alpha: 0.6),
                           blurRadius: 6,
                           spreadRadius: 1,
@@ -272,7 +361,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // ── Hero section ──────────────────────────────────
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
@@ -293,8 +382,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _AnimatedFoxIcon(color: primary),
                 const SizedBox(height: 12),
                 Text(
-                  'Download from 15+ platforms',
-                  style: theme.textTheme.bodyLarge?.copyWith(
+                  'Share link from any app or paste below',
+                  style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                     fontWeight: FontWeight.w500,
                   ),
@@ -304,21 +393,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
 
-          // ── URL input ─────────────────────────────────────
+          // ── URL input section ─────────────────────────────
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Paste a video link',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.onSurfaceVariant,
-                    letterSpacing: 0.3,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Video Link',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onSurfaceVariant,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    InkWell(
+                      onTap: _pasteFromClipboard,
+                      borderRadius: BorderRadius.circular(8),
+                      child: const Padding(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        child: Row(
+                          children: [
+                            Icon(Icons.paste_rounded,
+                                size: 14, color: Color(0xFFFF8A65)),
+                            SizedBox(width: 4),
+                            Text(
+                              'Paste Clipboard',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFFFF8A65),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -327,30 +444,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       child: TextField(
                         controller: _urlController,
                         decoration: InputDecoration(
-                          hintText: 'https://youtube.com/watch?v=...',
+                          hintText: 'Paste video link here...',
                           hintStyle: TextStyle(
                               color: Colors.white.withValues(alpha: 0.3)),
-                          prefixIcon: const Icon(Icons.link, size: 20),
+                          prefixIcon: const Icon(Icons.link_rounded, size: 20),
+                          suffixIcon: _urlController.text.isNotEmpty
+                              ? IconButton(
+                                  icon:
+                                      const Icon(Icons.close_rounded, size: 18),
+                                  onPressed: () =>
+                                      setState(() => _urlController.clear()),
+                                )
+                              : null,
                         ),
                         textInputAction: TextInputAction.go,
                         onSubmitted: (_) => _fetchInfo(),
                         autocorrect: false,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: 'Paste from clipboard',
-                      child: IconButton.filled(
-                        onPressed: _pasteFromClipboard,
-                        icon: const Icon(Icons.paste_rounded),
-                        style: IconButton.styleFrom(
-                          backgroundColor:
-                              Colors.white.withValues(alpha: 0.08),
-                          foregroundColor: Colors.white70,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
+                        onChanged: (_) => setState(() {}),
                       ),
                     ),
                   ],
@@ -368,8 +478,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2.5, color: Colors.white),
                           )
-                        : const Icon(Icons.search_rounded),
-                    label: Text(_isLoading ? 'Fetching info...' : 'Get Video Info'),
+                        : const Icon(Icons.download_rounded),
+                    label: Text(_isLoading
+                        ? 'Fetching details...'
+                        : 'Fetch & Download Video'),
                   ),
                 ),
               ],
@@ -392,11 +504,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 const SizedBox(height: 10),
-                Wrap(
+                const Wrap(
                   spacing: 8,
                   runSpacing: 6,
                   alignment: WrapAlignment.center,
-                  children: const [
+                  children: [
                     _PlatformChip('🎬', 'YouTube'),
                     _PlatformChip('📸', 'Instagram'),
                     _PlatformChip('🎵', 'TikTok'),
@@ -433,9 +545,9 @@ class _AnimatedFoxIconState extends State<_AnimatedFoxIcon>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(seconds: 2))
-      ..repeat(reverse: true);
+    _ctrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2))
+          ..repeat(reverse: true);
     _scale = Tween<double>(begin: 1.0, end: 1.08).animate(
       CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
     );
@@ -452,21 +564,30 @@ class _AnimatedFoxIconState extends State<_AnimatedFoxIcon>
     return ScaleTransition(
       scale: _scale,
       child: Container(
-        width: 84,
-        height: 84,
+        width: 90,
+        height: 90,
         decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: widget.color.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(22),
           boxShadow: [
             BoxShadow(
-              color: widget.color.withValues(alpha: 0.3),
-              blurRadius: 24,
-              spreadRadius: 4,
+              color: const Color(0xFFFF5722).withValues(alpha: 0.45),
+              blurRadius: 28,
+              spreadRadius: 2,
             ),
           ],
         ),
-        child: const Center(
-          child: Text('🦊', style: TextStyle(fontSize: 44)),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: Image.asset(
+            'assets/images/logo.png',
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              color: widget.color.withValues(alpha: 0.2),
+              child: const Center(
+                child: Text('🦊', style: TextStyle(fontSize: 44)),
+              ),
+            ),
+          ),
         ),
       ),
     );

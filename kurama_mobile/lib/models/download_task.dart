@@ -1,5 +1,9 @@
 enum DownloadStatus { pending, downloading, completed, failed }
 
+extension DownloadStatusDisplay on DownloadStatus {
+  String get displayLabel => name.toUpperCase();
+}
+
 class DownloadTask {
   final String taskId;
   final String url;
@@ -13,9 +17,14 @@ class DownloadTask {
   int? fileSize;
   String? fileSizeStr;
   String? error;
+  int? speedBytesPerSecond;
+  String? speedLabel;
+  int? etaSeconds;
   final DateTime createdAt;
   bool isSavedLocally;
   String? localPath;
+  bool isPrivate;
+  String? vaultPath;
 
   DownloadTask({
     required this.taskId,
@@ -30,9 +39,14 @@ class DownloadTask {
     this.fileSize,
     this.fileSizeStr,
     this.error,
+    this.speedBytesPerSecond,
+    this.speedLabel,
+    this.etaSeconds,
     DateTime? createdAt,
     this.isSavedLocally = false,
     this.localPath,
+    this.isPrivate = false,
+    this.vaultPath,
   }) : createdAt = createdAt ?? DateTime.now();
 
   String get statusLabel {
@@ -69,9 +83,15 @@ class DownloadTask {
       fileSize: json['file_size'] as int?,
       fileSizeStr: json['file_size_str'] as String?,
       error: json['error'] as String?,
+      speedBytesPerSecond:
+          (json['speed_bytes_per_second'] as num?)?.toInt(),
+      speedLabel: json['speed_label'] as String?,
+      etaSeconds: (json['eta_seconds'] as num?)?.toInt(),
       createdAt: parsedDate,
       isSavedLocally: json['is_saved_locally'] as bool? ?? false,
       localPath: json['local_path'] as String?,
+      isPrivate: json['is_private'] as bool? ?? false,
+      vaultPath: json['vault_path'] as String?,
     );
   }
 
@@ -103,8 +123,13 @@ class DownloadTask {
         'file_size': fileSize,
         'file_size_str': fileSizeStr,
         'error': error,
+        'speed_bytes_per_second': speedBytesPerSecond,
+        'speed_label': speedLabel,
+        'eta_seconds': etaSeconds,
         'created_at': createdAt.toIso8601String(),
         'is_saved_locally': isSavedLocally,
         'local_path': localPath,
+        'is_private': isPrivate,
+        'vault_path': vaultPath,
       };
 }

@@ -83,6 +83,10 @@ def build_ydl_opts(
             "preferredcodec": "mp3",
             "preferredquality": bitrate,
         })
+        postprocessors.extend([
+            {"key": "FFmpegMetadata", "add_metadata": True},
+            {"key": "EmbedThumbnail"},
+        ])
     elif send_as_doc:
         # Document: keep best quality, no re-encoding
         pass
@@ -112,6 +116,11 @@ def build_ydl_opts(
         "extract_flat": False,
         "postprocessors": postprocessors,
     }
+
+    if audio_only:
+        # yt-dlp maps title/uploader into ID3 title/artist and converts the
+        # downloaded thumbnail into MP3-compatible album artwork.
+        opts["writethumbnail"] = True
 
     # Only disable TLS verification if explicitly opted in via env var
     if YTDLP_INSECURE:

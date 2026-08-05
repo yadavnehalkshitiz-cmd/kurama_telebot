@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import '../models/video_info.dart';
 import '../models/download_task.dart';
+import '../models/user_profile.dart';
 
 // ── Timeouts ────────────────────────────────────────────────
 const _kShortTimeout = Duration(seconds: 10);
@@ -54,7 +55,10 @@ class ApiClient {
       throw ApiException('Server took too long to respond. Check your connection.');
     });
     if (resp.statusCode != 200) {
-      throw ApiException(_extractError(resp));
+      throw ApiException(
+        _extractError(resp),
+        statusCode: resp.statusCode,
+      );
     }
     return VideoInfo.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
@@ -62,6 +66,7 @@ class ApiClient {
   /// Start a download and return the task ID.
   Future<String> startDownload({
     required String url,
+    required int userId,
     String format = 'video',
     String videoQuality = 'best',
     String audioQuality = 'best',
@@ -72,6 +77,7 @@ class ApiClient {
           headers: _headers,
           body: jsonEncode({
             'url': url,
+            'user_id': userId,
             'format': format,
             'video_quality': videoQuality,
             'audio_quality': audioQuality,
@@ -169,7 +175,7 @@ class ApiClient {
   }
 
   /// Fetch user profile (credits balance & subscription status).
-  Future<Map<String, dynamic>> getUserProfile(int userId) async {
+  Future<UserProfile> getUserProfile(int userId) async {
     final resp = await http
         .get(
           Uri.parse('$baseUrl/api/user/$userId/profile'),
@@ -179,6 +185,21 @@ class ApiClient {
     if (resp.statusCode != 200) {
       throw ApiException(_extractError(resp));
     }
+    return UserProfile.fromJson(
+      jsonDecode(resp.body) as Map<String, dynamic>,
+    );
+  }
+
+  Future<Map<String, dynamic>> claimDailyReward(int userId) async {
+    final resp = await http
+        .post(
+          Uri.parse('$baseUrl/api/user/$userId/claim-daily'),
+          headers: _headers,
+        )
+        .timeout(_kFetchTimeout);
+    if (resp.statusCode != 200) {
+      throw ApiException(_extractError(resp), statusCode: resp.statusCode);
+    }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
@@ -186,14 +207,22 @@ class ApiClient {
   Future<Map<String, dynamic>> submitPayment({
     required int userId,
     required String txId,
+    required String method,
+    String? receiptPath,
   }) async {
-    final resp = await http
-        .post(
-          Uri.parse('$baseUrl/api/user/submit_payment'),
-          headers: _headers,
-          body: jsonEncode({'user_id': userId, 'tx_id': txId}),
-        )
-        .timeout(_kFetchTimeout);
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/api/user/submit-payment'),
+    )
+      ..headers['Authorization'] = 'Bearer $apiKey'
+      ..fields['user_id'] = userId.toString()
+      ..fields['tx_id'] = txId
+      ..fields['method'] = method;
+    if (receiptPath != null && receiptPath.isNotEmpty) {
+      request.files.add(await http.MultipartFile.fromPath('receipt', receiptPath));
+    }
+    final streamed = await request.send().timeout(_kFetchTimeout);
+    final resp = await http.Response.fromStream(streamed);
     if (resp.statusCode != 200) {
       throw ApiException(_extractError(resp));
     }
@@ -203,7 +232,12 @@ class ApiClient {
   String _extractError(http.Response resp) {
     try {
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
-      return body['detail'] as String? ?? 'HTTP ${resp.statusCode}';
+      final detail = body['detail'];
+      if (detail is String) return detail;
+      if (detail is Map && detail['message'] != null) {
+        return detail['message'].toString();
+      }
+      return 'HTTP ${resp.statusCode}';
     } catch (_) {
       return 'HTTP ${resp.statusCode}';
     }
@@ -212,7 +246,12 @@ class ApiClient {
 
 class ApiException implements Exception {
   final String message;
-  ApiException(this.message);
+  final int? statusCode;
+
+  ApiException(this.message, {this.statusCode});
+
+  bool get isUnsupportedMedia => statusCode == 400;
+
   @override
   String toString() => message;
 }

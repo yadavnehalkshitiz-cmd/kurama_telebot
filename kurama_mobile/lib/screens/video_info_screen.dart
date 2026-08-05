@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../models/video_info.dart';
 import '../models/download_task.dart';
 import '../services/app_state.dart';
+import '../services/background_download_service.dart';
 import '../widgets/platform_badge.dart';
 import 'download_progress_screen.dart';
 
@@ -55,8 +56,8 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
             // ── Thumbnail ──────────────────────────────────
             if (info.thumbnail != null)
               ClipRRect(
-                borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(20)),
+                borderRadius:
+                    const BorderRadius.vertical(bottom: Radius.circular(20)),
                 child: Image.network(
                   info.thumbnail!,
                   width: double.infinity,
@@ -64,13 +65,14 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                   fit: BoxFit.cover,
                   loadingBuilder: (_, child, progress) {
                     if (progress == null) return child;
-                    return _ThumbnailShimmer(height: 220);
+                    return const _ThumbnailShimmer(height: 220);
                   },
-                  errorBuilder: (_, __, ___) => _ThumbnailPlaceholder(height: 140),
+                  errorBuilder: (_, __, ___) =>
+                      const _ThumbnailPlaceholder(height: 140),
                 ),
               )
             else
-              _ThumbnailPlaceholder(height: 140),
+              const _ThumbnailPlaceholder(height: 140),
 
             Padding(
               padding: const EdgeInsets.all(20),
@@ -111,8 +113,8 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                         _StatChip(Icons.visibility_outlined,
                             '${_formatViews(info.views!)} views'),
                       if (info.uploadDate != null)
-                        _StatChip(Icons.calendar_today_outlined,
-                            info.uploadDate!),
+                        _StatChip(
+                            Icons.calendar_today_outlined, info.uploadDate!),
                     ],
                   ),
 
@@ -124,14 +126,13 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                       decoration: BoxDecoration(
                         color: primary.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                            color: primary.withValues(alpha: 0.3)),
+                        border:
+                            Border.all(color: primary.withValues(alpha: 0.3)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.playlist_play,
-                              size: 16, color: primary),
+                          Icon(Icons.playlist_play, size: 16, color: primary),
                           const SizedBox(width: 6),
                           Text(
                             'Playlist · ${info.playlistCount} videos',
@@ -148,7 +149,7 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                   const Divider(height: 36),
 
                   // ── Format selection ─────────────────────
-                  _SectionLabel('Format'),
+                  const _SectionLabel('Format'),
                   const SizedBox(height: 10),
                   SegmentedButton<String>(
                     segments: const [
@@ -188,7 +189,7 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
 
                   // ── Quality selection ────────────────────
                   if (_selectedFormat == 'video') ...[
-                    _SectionLabel('Video Quality'),
+                    const _SectionLabel('Video Quality'),
                     const SizedBox(height: 10),
                     _QualityGrid(
                       qualities: _videoQualities,
@@ -200,7 +201,7 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                   ],
 
                   if (_selectedFormat == 'audio') ...[
-                    _SectionLabel('Audio Bitrate'),
+                    const _SectionLabel('Audio Bitrate'),
                     const SizedBox(height: 10),
                     _QualityGrid(
                       qualities: _audioQualities,
@@ -259,10 +260,12 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
       final api = context.read<AppState>().client;
       final taskId = await api.startDownload(
         url: widget.info.url,
+        userId: context.read<AppState>().userId,
         format: _selectedFormat,
         videoQuality: _selectedVideoQuality,
         audioQuality: _selectedAudioQuality,
       );
+      if (!mounted) return;
 
       final task = DownloadTask(
         taskId: taskId,
@@ -276,13 +279,17 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
             : _selectedVideoQuality,
       );
       Provider.of<AppState>(context, listen: false).addDownload(task);
-
+      try {
+        await BackgroundDownloadService.schedule(task: task, client: api);
+      } catch (error) {
+        debugPrint('[BackgroundDownload] Scheduling failed: $error');
+      }
       if (!mounted) return;
+
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) =>
-              DownloadProgressScreen(taskId: taskId, task: task),
+          builder: (_) => DownloadProgressScreen(taskId: taskId, task: task),
         ),
       );
     } catch (e) {
@@ -323,17 +330,15 @@ class _QualityGrid extends StatelessWidget {
           onTap: () => onSelect(value),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
               color: isSelected
                   ? primary.withValues(alpha: 0.2)
                   : Colors.white.withValues(alpha: 0.05),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: isSelected
-                    ? primary
-                    : Colors.white.withValues(alpha: 0.12),
+                color:
+                    isSelected ? primary : Colors.white.withValues(alpha: 0.12),
                 width: isSelected ? 2 : 1,
               ),
             ),
@@ -341,8 +346,7 @@ class _QualityGrid extends StatelessWidget {
               label,
               style: TextStyle(
                 color: isSelected ? primary : Colors.white70,
-                fontWeight:
-                    isSelected ? FontWeight.w700 : FontWeight.w500,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                 fontSize: 13,
               ),
             ),
@@ -380,8 +384,7 @@ class _StatChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(8),
-        border:
-            Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
