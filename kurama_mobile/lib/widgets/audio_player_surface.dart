@@ -117,8 +117,7 @@ class _AudioPlayerSurfaceState extends State<AudioPlayerSurface> {
       // Resume from where the user left off (throttled persistence below).
       final saved = await PlaybackPositionStore.load(widget.filePath);
       final duration = _player.duration;
-      if (saved > Duration.zero &&
-          (duration == null || saved < duration)) {
+      if (saved > Duration.zero && (duration == null || saved < duration)) {
         await _player.seek(saved);
       }
       await _player.play();
@@ -185,94 +184,92 @@ class _AudioPlayerSurfaceState extends State<AudioPlayerSurface> {
               physics: const ClampingScrollPhysics(),
               child: ConstrainedBox(
                 constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: IntrinsicHeight(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(28, 12, 28, 20),
-                    child: Column(
-                      children: [
-                        const Spacer(),
-                        // ── Artwork ──────────────────────────
-                        StreamBuilder<PlayerState>(
-                          stream: _player.playerStateStream,
-                          builder: (context, snapshot) {
-                            final playing = snapshot.data?.playing ?? false;
-                            return _ArtworkTile(
-                              artworkUrl: widget.artworkUrl,
-                              playing: playing,
-                              reduceMotion: reduceMotion,
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 30),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(28, 12, 28, 20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // ── Artwork ──────────────────────────
+                      StreamBuilder<PlayerState>(
+                        stream: _player.playerStateStream,
+                        builder: (context, snapshot) {
+                          final playing = snapshot.data?.playing ?? false;
+                          return _ArtworkTile(
+                            artworkUrl: widget.artworkUrl,
+                            playing: playing,
+                            reduceMotion: reduceMotion,
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 30),
 
-                        // ── Title & artist ───────────────────
-                        Text(
-                          widget.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                            height: 1.25,
-                          ),
+                      // ── Title & artist ───────────────────
+                      Text(
+                        widget.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          height: 1.25,
                         ),
-                        const SizedBox(height: 6),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        widget.artist ?? 'KuramaBot audio',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 30),
+
+                      // ── Media rail seek bar ──────────────
+                      _SeekRail(player: _player),
+                      const SizedBox(height: 22),
+
+                      // ── Transport ────────────────────────
+                      if (widget.queueLabel != null) ...[
                         Text(
-                          widget.artist ?? 'KuramaBot audio',
-                          textAlign: TextAlign.center,
+                          widget.queueLabel!,
                           style: const TextStyle(
                             color: Colors.white54,
-                            fontSize: 14,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.4,
                           ),
                         ),
-                        const SizedBox(height: 30),
-
-                        // ── Media rail seek bar ──────────────
-                        _SeekRail(player: _player),
-                        const SizedBox(height: 22),
-
-                        // ── Transport ────────────────────────
-                        if (widget.queueLabel != null) ...[
-                          Text(
-                            widget.queueLabel!,
-                            style: const TextStyle(
-                              color: Colors.white54,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.4,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                        ],
-                        _Transport(
-                          player: _player,
-                          onPrev: widget.onPrev,
-                          onNext: widget.onNext,
-                        ),
-                        const SizedBox(height: 22),
-
-                        // ── Speed, repeat & sleep ────────────
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            _SpeedControl(player: _player),
-                            const SizedBox(width: 12),
-                            _RepeatToggle(player: _player),
-                            const SizedBox(width: 12),
-                            _SleepTimerButton(
-                              until: _sleepUntil,
-                              onSelect: _setSleepTimer,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 26),
-
-                        // ── Lock-screen hint ─────────────────
-                        const _LockHint(),
-                        const Spacer(),
+                        const SizedBox(height: 10),
                       ],
-                    ),
+                      _Transport(
+                        player: _player,
+                        onPrev: widget.onPrev,
+                        onNext: widget.onNext,
+                      ),
+                      const SizedBox(height: 22),
+
+                      // ── Speed, repeat & sleep ────────────
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _SpeedControl(player: _player),
+                          const SizedBox(width: 12),
+                          _RepeatToggle(player: _player),
+                          const SizedBox(width: 12),
+                          _SleepTimerButton(
+                            until: _sleepUntil,
+                            onSelect: _setSleepTimer,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 26),
+
+                      // ── Lock-screen hint ─────────────────
+                      const _LockHint(),
+                    ],
                   ),
                 ),
               ),
@@ -351,9 +348,8 @@ class _ArtworkTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedScale(
       scale: playing ? 1.03 : 1.0,
-      duration: reduceMotion
-          ? Duration.zero
-          : const Duration(milliseconds: 550),
+      duration:
+          reduceMotion ? Duration.zero : const Duration(milliseconds: 550),
       curve: Curves.easeInOut,
       child: Container(
         width: 210,
@@ -680,9 +676,8 @@ class _PlayPauseButton extends StatelessWidget {
         shadowColor: const Color(0x66FF5722),
       ),
       icon: AnimatedSwitcher(
-        duration: reduceMotion
-            ? Duration.zero
-            : const Duration(milliseconds: 180),
+        duration:
+            reduceMotion ? Duration.zero : const Duration(milliseconds: 180),
         transitionBuilder: (child, animation) => ScaleTransition(
           scale: animation,
           child: child,

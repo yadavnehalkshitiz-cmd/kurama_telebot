@@ -50,8 +50,7 @@ class ApiClient {
   Future<ConnectionStatus> checkConnection() async {
     final slowHost = baseUrl.contains('onrender.com');
     final attempts = slowHost ? 3 : 1;
-    final timeout =
-        slowHost ? const Duration(seconds: 20) : _kShortTimeout;
+    final timeout = slowHost ? const Duration(seconds: 20) : _kShortTimeout;
     for (var attempt = 0; attempt < attempts; attempt++) {
       final status = await _probeConnection(timeout);
       if (status != ConnectionStatus.offline || !slowHost) return status;
@@ -84,10 +83,10 @@ class ApiClient {
   Future<VideoInfo> fetchInfo(String url) async {
     final resp = await http
         .post(
-          Uri.parse('$baseUrl/api/fetch-info'),
-          headers: _headers,
-          body: jsonEncode({'url': url}),
-        )
+      Uri.parse('$baseUrl/api/fetch-info'),
+      headers: _headers,
+      body: jsonEncode({'url': url}),
+    )
         .timeout(_kFetchTimeout, onTimeout: () {
       throw ApiException(
         'Server took too long to respond. Check your connection.',
@@ -115,18 +114,18 @@ class ApiClient {
   }) async {
     final resp = await http
         .post(
-          Uri.parse('$baseUrl/api/download'),
-          headers: _headers,
-          body: jsonEncode({
-            'url': url,
-            'user_id': userId,
-            'format': format,
-            'video_quality': videoQuality,
-            'audio_quality': audioQuality,
-            'thumbnail': thumbnail,
-            'playlist': playlist,
-          }),
-        )
+      Uri.parse('$baseUrl/api/download'),
+      headers: _headers,
+      body: jsonEncode({
+        'url': url,
+        'user_id': userId,
+        'format': format,
+        'video_quality': videoQuality,
+        'audio_quality': audioQuality,
+        'thumbnail': thumbnail,
+        'playlist': playlist,
+      }),
+    )
         .timeout(_kFetchTimeout, onTimeout: () {
       throw ApiException('Server did not respond. Try again.', isTimeout: true);
     });
@@ -144,9 +143,9 @@ class ApiClient {
   Future<void> retryDownload(String taskId) async {
     final resp = await http
         .post(
-          Uri.parse('$baseUrl/api/download/$taskId/retry'),
-          headers: _headers,
-        )
+      Uri.parse('$baseUrl/api/download/$taskId/retry'),
+      headers: _headers,
+    )
         .timeout(_kFetchTimeout, onTimeout: () {
       throw ApiException('Server did not respond. Try again.', isTimeout: true);
     });
@@ -160,10 +159,9 @@ class ApiClient {
 
   /// Live task status over Server-Sent Events. Falls back handled by the
   /// caller (plain polling) when streaming is unavailable.
-  Stream<DownloadTask> getDownloadStatusStream(String taskId,
-      {String? url}) {
+  Stream<DownloadTask> getDownloadStatusStream(String taskId, {String? url}) {
     late final StreamController<DownloadTask> controller;
-    StreamSubscription<List<int>>? responseSub;
+    StreamSubscription<String>? responseSub;
     var closed = false;
 
     void safeClose() {
@@ -202,46 +200,47 @@ class ApiClient {
           }
           var buffer = '';
           responseSub = streamed.stream.transform(utf8.decoder).listen(
-            (chunk) {
-              buffer += chunk;
-              while (true) {
-                final frameEnd = buffer.indexOf('\n\n');
-                if (frameEnd < 0) break;
-                final frame = buffer.substring(0, frameEnd);
-                buffer = buffer.substring(frameEnd + 2);
-                String? event;
-                String? data;
-                for (final line in frame.split('\n')) {
-                  if (line.startsWith('event: ')) {
-                    event = line.substring(7);
-                  } else if (line.startsWith('data: ')) {
-                    data = line.substring(6);
+                (chunk) {
+                  buffer += chunk;
+                  while (true) {
+                    final frameEnd = buffer.indexOf('\n\n');
+                    if (frameEnd < 0) break;
+                    final frame = buffer.substring(0, frameEnd);
+                    buffer = buffer.substring(frameEnd + 2);
+                    String? event;
+                    String? data;
+                    for (final line in frame.split('\n')) {
+                      if (line.startsWith('event: ')) {
+                        event = line.substring(7);
+                      } else if (line.startsWith('data: ')) {
+                        data = line.substring(6);
+                      }
+                    }
+                    if (data == null) continue;
+                    try {
+                      final map = jsonDecode(data) as Map<String, dynamic>;
+                      if (event == 'error') {
+                        safeAddError(ApiException(
+                          map['detail']?.toString() ?? 'Server error',
+                          statusCode: 404,
+                        ));
+                        safeClose();
+                        continue;
+                      }
+                      safeAdd(
+                        DownloadTask.fromJson(map,
+                            taskId: taskId, url: url ?? ''),
+                      );
+                      if (event == 'done') safeClose();
+                    } catch (_) {}
                   }
-                }
-                if (data == null) continue;
-                try {
-                  final map = jsonDecode(data) as Map<String, dynamic>;
-                  if (event == 'error') {
-                    safeAddError(ApiException(
-                      map['detail']?.toString() ?? 'Server error',
-                      statusCode: 404,
-                    ));
-                    safeClose();
-                    continue;
-                  }
-                  safeAdd(
-                    DownloadTask.fromJson(map, taskId: taskId, url: url ?? ''),
-                  );
-                  if (event == 'done') safeClose();
-                } catch (_) {}
-              }
-            },
-            onDone: () => safeClose(),
-            onError: (Object error, StackTrace stack) {
-              safeAddError(error, stack);
-              safeClose();
-            },
-          );
+                },
+                onDone: () => safeClose(),
+                onError: (Object error, StackTrace stack) {
+                  safeAddError(error, stack);
+                  safeClose();
+                },
+              );
         } catch (error) {
           safeAddError(error);
           safeClose();
@@ -270,9 +269,9 @@ class ApiClient {
   Future<DownloadTask> getDownloadStatus(String taskId, {String? url}) async {
     final resp = await http
         .get(
-          Uri.parse('$baseUrl/api/download/$taskId'),
-          headers: _headers,
-        )
+      Uri.parse('$baseUrl/api/download/$taskId'),
+      headers: _headers,
+    )
         .timeout(_kShortTimeout, onTimeout: () {
       throw ApiException('Server timed out while checking progress.',
           isTimeout: true);
@@ -510,9 +509,9 @@ class ApiClient {
   Future<UserProfile> getUserProfile(int userId) async {
     final resp = await http
         .get(
-          Uri.parse('$baseUrl/api/user/$userId/profile'),
-          headers: _headers,
-        )
+      Uri.parse('$baseUrl/api/user/$userId/profile'),
+      headers: _headers,
+    )
         .timeout(_kFetchTimeout, onTimeout: () {
       throw ApiException('Server timed out while loading your profile.',
           isTimeout: true);
@@ -531,9 +530,9 @@ class ApiClient {
   Future<Map<String, dynamic>> claimDailyReward(int userId) async {
     final resp = await http
         .post(
-          Uri.parse('$baseUrl/api/user/$userId/claim-daily'),
-          headers: _headers,
-        )
+      Uri.parse('$baseUrl/api/user/$userId/claim-daily'),
+      headers: _headers,
+    )
         .timeout(_kFetchTimeout, onTimeout: () {
       throw ApiException('Server timed out. Try again.', isTimeout: true);
     });
@@ -562,7 +561,8 @@ class ApiClient {
       ..fields['tx_id'] = txId
       ..fields['method'] = method;
     if (receiptPath != null && receiptPath.isNotEmpty) {
-      request.files.add(await http.MultipartFile.fromPath('receipt', receiptPath));
+      request.files
+          .add(await http.MultipartFile.fromPath('receipt', receiptPath));
     }
     final streamed = await request.send().timeout(_kFetchTimeout);
     final resp = await http.Response.fromStream(streamed);

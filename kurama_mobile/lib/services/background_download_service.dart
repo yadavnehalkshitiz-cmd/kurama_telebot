@@ -47,10 +47,13 @@ void backgroundDownloadDispatcher() {
       }
       // Prefer the server-reported filename so the extension matches the
       // real file; fall back to a format-based guess for older servers.
-      final name = status.filename ??
+      // `status` is guaranteed non-null here (a null status throws above).
+      final name = status!.filename ??
           'download_$taskId.${format == 'audio' ? 'mp3' : 'mp4'}';
       final path = await client.downloadFile(taskId, filename: name);
-      status!
+      // `status!` above promoted `status` to non-null for the rest of the
+      // block, so the cascade below can use it directly.
+      status
         ..localPath = path
         ..isSavedLocally = true;
       final storage = DownloadStorage(await SharedPreferences.getInstance());

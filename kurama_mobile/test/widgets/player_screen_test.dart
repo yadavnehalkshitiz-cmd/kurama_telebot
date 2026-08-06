@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kurama_mobile/screens/player_screen.dart';
 import 'package:kurama_mobile/widgets/audio_player_surface.dart';
@@ -14,6 +15,34 @@ Future<void> settleIo(WidgetTester tester) async {
 }
 
 void main() {
+  // just_audio has no platform implementation in the test environment. Mock
+  // its method channel so player creation/disposal round-trips cleanly while
+  // media loading still fails (which is what the audio test asserts on).
+  const audioChannel = MethodChannel('com.ryanheise.just_audio.methods');
+
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(audioChannel, (call) async {
+      // Allow lifecycle calls. The platform interface null-checks the returned
+      // map for disposePlayer/disposeAllPlayers, so an empty map is expected.
+      if (call.method == 'disposePlayer' ||
+          call.method == 'disposeAllPlayers') {
+        return <String, dynamic>{};
+      }
+      // Fail player initialization: with no real platform the audio source
+      // cannot load, which is exactly the state the test asserts on. Throwing
+      // on the mocked main channel keeps the failure fast and deterministic
+      // (the per-player channels below are never reached).
+      throw MissingPluginException(
+        'No implementation found for method ${call.method}',
+      );
+    });
+  });
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(audioChannel, null);
+  });
   testWidgets('missing file shows a graceful error', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
