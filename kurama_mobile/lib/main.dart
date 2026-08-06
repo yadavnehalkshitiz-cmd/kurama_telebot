@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:just_audio_background/just_audio_background.dart';
+import 'models/download_task.dart';
 import 'services/api_client.dart';
 import 'services/app_state.dart';
 import 'services/download_storage.dart';
@@ -69,12 +70,30 @@ void main() async {
   });
 }
 
-void _openDownloadedMedia(String path) {
+Future<void> _openDownloadedMedia(String path) async {
   final context = navigatorKey.currentContext;
   if (context == null) return;
+  // Find the source task so the player shows the real title + thumbnail.
+  DownloadTask? match;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    for (final task in DownloadStorage(prefs).loadDownloads()) {
+      if (task.localPath == path || task.vaultPath == path) {
+        match = task;
+        break;
+      }
+    }
+  } catch (_) {}
+  if (!context.mounted) return;
   Navigator.of(context).push(
     MaterialPageRoute(
-      builder: (_) => PlayerScreen(filePath: path, title: 'Downloaded media'),
+      builder: (_) => PlayerScreen(
+        filePath: path,
+        title: match?.title ?? 'Downloaded media',
+        format: match?.format ?? 'video',
+        artist: match?.format == 'audio' ? match?.platform : null,
+        artworkUrl: match?.thumbnailUrl,
+      ),
     ),
   );
 }

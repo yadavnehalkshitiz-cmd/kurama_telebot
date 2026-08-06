@@ -23,6 +23,10 @@ class DownloadTask {
   final DateTime createdAt;
   bool isSavedLocally;
   String? localPath;
+  String? filename;
+
+  /// Artwork URL captured at download time, shown in the media player.
+  String? thumbnailUrl;
   bool isPrivate;
   String? vaultPath;
 
@@ -45,6 +49,8 @@ class DownloadTask {
     DateTime? createdAt,
     this.isSavedLocally = false,
     this.localPath,
+    this.filename,
+    this.thumbnailUrl,
     this.isPrivate = false,
     this.vaultPath,
   }) : createdAt = createdAt ?? DateTime.now();
@@ -90,6 +96,8 @@ class DownloadTask {
       createdAt: parsedDate,
       isSavedLocally: json['is_saved_locally'] as bool? ?? false,
       localPath: json['local_path'] as String?,
+      filename: json['filename'] as String?,
+      thumbnailUrl: json['thumbnail'] as String?,
       isPrivate: json['is_private'] as bool? ?? false,
       vaultPath: json['vault_path'] as String?,
     );
@@ -129,6 +137,8 @@ class DownloadTask {
         'created_at': createdAt.toIso8601String(),
         'is_saved_locally': isSavedLocally,
         'local_path': localPath,
+        'filename': filename,
+        'thumbnail': thumbnailUrl,
         'is_private': isPrivate,
         'vault_path': vaultPath,
       };

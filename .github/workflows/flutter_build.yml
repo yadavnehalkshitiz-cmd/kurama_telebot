@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -92,7 +92,7 @@ jobs:
 
       # Always save artifact (useful for non-release pushes)
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: KuramaBot-Android-APK
           path: kurama_mobile/build/app/outputs/flutter-apk/app-release.apk
@@ -113,7 +113,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -140,7 +140,7 @@ jobs:
         run: Compress-Archive -Path kurama_mobile/build/windows/x64/runner/Release/* -DestinationPath KuramaBot-Windows.zip
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: KuramaBot-Windows-App
           path: KuramaBot-Windows.zip
@@ -160,13 +160,13 @@ jobs:
 
     steps:
       - name: Download Android APK
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: KuramaBot-Android-APK
           path: ./release
 
       - name: Download Windows App
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: KuramaBot-Windows-App
           path: ./release
@@ -176,6 +176,8 @@ jobs:
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           name: "🦊 KuramaBot ${{ github.ref_name }}"
           body: |

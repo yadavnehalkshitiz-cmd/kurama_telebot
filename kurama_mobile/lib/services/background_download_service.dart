@@ -45,18 +45,26 @@ void backgroundDownloadDispatcher() {
       if (status?.status != DownloadStatus.completed) {
         throw ApiException('Background download timed out');
       }
-      final extension = format == 'audio' ? 'mp3' : 'mp4';
-      final path = await client.downloadFile(
-        taskId,
-        filename: 'download_$taskId.$extension',
-      );
+      // Prefer the server-reported filename so the extension matches the
+      // real file; fall back to a format-based guess for older servers.
+      final name = status.filename ??
+          'download_$taskId.${format == 'audio' ? 'mp3' : 'mp4'}';
+      final path = await client.downloadFile(taskId, filename: name);
       status!
         ..localPath = path
         ..isSavedLocally = true;
       final storage = DownloadStorage(await SharedPreferences.getInstance());
       final downloads = storage.loadDownloads();
       final index = downloads.indexWhere((task) => task.taskId == taskId);
-      if (index >= 0) downloads[index] = status;
+      if (index >= 0) {
+        final previous = downloads[index];
+        // Older servers don't echo the thumbnail — keep the one captured when
+        // the download was started so the player artwork survives.
+        if (status.thumbnailUrl == null && previous.thumbnailUrl != null) {
+          status.thumbnailUrl = previous.thumbnailUrl;
+        }
+        downloads[index] = status;
+      }
       await storage.saveDownloads(downloads);
       await NotificationService.showComplete(
         taskId: taskId,

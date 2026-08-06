@@ -2,6 +2,7 @@
 
 import os
 import time
+import shutil
 import logging
 import asyncio
 import ipaddress
@@ -899,7 +900,11 @@ async def _run_download(chat_id, query, context):
 
     # ── Save folder ─────────────────────────────────────
     if for_mobile:
-        save_folder = TEMP_FOLDER
+        # Per-download subfolder so cleanup and playlist delivery never touch
+        # files from other concurrent downloads in the shared temp folder.
+        save_folder = os.path.join(
+            TEMP_FOLDER, f"dl_{chat_id}_{int(time.time() * 1000)}"
+        )
     elif audio_only:
         custom = user_config.get_custom_folder(chat_id)
         save_folder = custom or os.path.join(LAPTOP_FOLDER, "Audio")
@@ -945,6 +950,7 @@ async def _run_download(chat_id, query, context):
     )
 
     # ── Download ────────────────────────────────────────
+    download_started_at = time.time()
     try:
         filepath, info = await asyncio.to_thread(download_single, url, ydl_opts)
         sess["filepath"] = filepath
@@ -959,7 +965,12 @@ async def _run_download(chat_id, query, context):
 
     # ── Post-download actions ───────────────────────────
     try:
-        if dest == "laptop":
+        if playlist_mode:
+            await _handle_playlist_done(
+                query, context, chat_id, save_folder, icon, audio_only,
+                send_as_doc, dest, download_started_at,
+            )
+        elif dest == "laptop":
             await _handle_laptop_done(query, chat_id, title, filepath, file_size, audio_only)
         elif dest == "both":
             await _handle_both_done(query, context, chat_id, title, filepath, icon, audio_only, send_as_doc)
@@ -980,6 +991,68 @@ async def _run_download(chat_id, query, context):
 
 
 # ─── Post-download helpers ──────────────────────────────
+
+async def _handle_playlist_done(
+    query, context, chat_id, save_folder, icon, audio_only,
+    send_as_doc, dest, started_at,
+):
+    """Deliver every downloaded playlist file to Telegram (not just the last)."""
+    # Only files created by THIS download: mobile uses a per-download folder,
+    # but the laptop folder (dest=both) is shared, so filter by mtime.
+    cutoff = started_at - 10
+    files = sorted(
+        os.path.join(save_folder, name)
+        for name in os.listdir(save_folder)
+        if os.path.isfile(os.path.join(save_folder, name))
+        and os.path.getmtime(os.path.join(save_folder, name)) >= cutoff
+    )
+    if not files:
+        await _safe_edit(query, "⚠️ *Playlist finished, but no files were produced.*")
+        _cleanup_session(chat_id)
+        return
+
+    total = len(files)
+
+    # Laptop destination: files stay on disk — just report.
+    if dest == "laptop":
+        await _safe_edit(
+            query,
+            f"✅ *Playlist saved to Laptop!* ({total} files)\n📁 `{save_folder}`",
+        )
+        _cleanup_session(chat_id)
+        return
+
+    sent = 0
+    try:
+        for index, path in enumerate(files, 1):
+            try:
+                await _safe_edit(query, f"📤 *Sending {index}/{total} to Telegram…*")
+                if audio_only:
+                    await send_audio(context, chat_id, path, os.path.basename(path), icon)
+                elif send_as_doc:
+                    await send_document(context, chat_id, path, os.path.basename(path), icon)
+                else:
+                    await send_video(context, chat_id, path, os.path.basename(path), icon)
+                sent += 1
+            except Exception as e:
+                logger.error(f"Playlist item {index} send failed: {e}")
+        await _safe_edit(
+            query,
+            f"✅ *Playlist complete — {sent}/{total} files sent to Telegram!*",
+        )
+    finally:
+        # Temp files are deleted after a Telegram-only playlist.
+        if dest == "mobile":
+            _remove_mobile_download_dir(save_folder)
+        _cleanup_session(chat_id)
+
+
+def _remove_mobile_download_dir(folder):
+    """Delete a per-download temp folder (never the shared TEMP_FOLDER root)."""
+    base = os.path.basename(folder)
+    if folder.startswith(TEMP_FOLDER) and base.startswith("dl_"):
+        shutil.rmtree(folder, ignore_errors=True)
+
 
 async def _handle_laptop_done(query, chat_id, title, filepath, file_size, audio_only):
     label = "🎵 Audio" if audio_only else "🎬 Video"
@@ -1003,11 +1076,7 @@ async def _handle_mobile_done(query, context, chat_id, title, filepath, icon, au
             await send_video(context, chat_id, filepath, title, icon)
         await _safe_edit(query, "✅ *Sent to Telegram!* 💾 Save from your chat above.")
     finally:
-        if os.path.exists(filepath):
-            try:
-                os.remove(filepath)
-            except OSError as e:
-                logger.debug(f"Failed to clean temp file {filepath}: {e}")
+        _remove_mobile_download_dir(os.path.dirname(filepath))
     _cleanup_session(chat_id)
 
 

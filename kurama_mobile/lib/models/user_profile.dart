@@ -20,7 +20,7 @@ class UserProfile {
   factory UserProfile.fromJson(Map<String, dynamic> json) {
     final rawMethods = json['payment_methods'] as Map<String, dynamic>? ?? {};
     return UserProfile(
-      userId: (json['user_id'] as num).toInt(),
+      userId: (json['user_id'] as num?)?.toInt() ?? 0,
       credits: (json['credits'] as num?)?.toInt() ?? 0,
       isPro: json['is_subscription_active'] as bool? ?? false,
       subscriptionExpiresAt:

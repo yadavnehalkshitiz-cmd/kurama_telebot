@@ -143,6 +143,8 @@ class _VaultScreenState extends State<VaultScreen>
             filePath: temporaryFile!.path,
             title: task.title,
             format: task.format,
+            artist: task.format == 'audio' ? task.platform : null,
+            artworkUrl: task.thumbnailUrl,
           ),
         ),
       );

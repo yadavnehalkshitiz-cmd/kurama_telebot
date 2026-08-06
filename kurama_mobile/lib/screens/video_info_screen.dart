@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/video_info.dart';
@@ -6,6 +7,8 @@ import '../services/app_state.dart';
 import '../services/background_download_service.dart';
 import '../widgets/platform_badge.dart';
 import 'download_progress_screen.dart';
+import 'downloads_screen.dart';
+import 'player_screen.dart';
 
 class VideoInfoScreen extends StatefulWidget {
   final VideoInfo info;
@@ -20,6 +23,7 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
   String _selectedFormat = 'video';
   String _selectedVideoQuality = 'best';
   String _selectedAudioQuality = 'best';
+  bool _downloadPlaylist = false;
 
   static const _videoQualities = [
     ('best', '🎯 Best'),
@@ -144,6 +148,25 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
                         ],
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Download all videos'),
+                      subtitle: Text(
+                        'Bundles up to ${info.playlistCount} videos into a ZIP file',
+                      ),
+                      value: _downloadPlaylist,
+                      activeThumbColor: primary,
+                      onChanged: (v) => setState(() => _downloadPlaylist = v),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Playlist ZIPs keep the original files — find them in '
+                      'the Downloads tab after saving.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
                   ],
 
                   const Divider(height: 36),
@@ -255,6 +278,58 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
   }
 
   Future<void> _startDownload() async {
+    // Already downloaded this URL? Offer to open it instead of paying again.
+    final existing = context
+        .read<AppState>()
+        .downloads
+        .where((t) =>
+            t.url == widget.info.url && t.status == DownloadStatus.completed)
+        .firstOrNull;
+    if (existing != null) {
+      final open = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Already downloaded'),
+              content: Text('“${existing.title}” is already in your downloads.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Download again'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Open it'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!mounted) return;
+      if (open) {
+        if (existing.localPath != null &&
+            File(existing.localPath!).existsSync()) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PlayerScreen(
+                filePath: existing.localPath!,
+                title: existing.title,
+                format: existing.format,
+                artist: existing.format == 'audio' ? existing.platform : null,
+                artworkUrl: existing.thumbnailUrl,
+              ),
+            ),
+          );
+        } else {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+          );
+        }
+        return;
+      }
+    }
+
     try {
       // ✅ FIX: access ApiClient through AppState — it's not provided separately
       final api = context.read<AppState>().client;
@@ -264,6 +339,8 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
         format: _selectedFormat,
         videoQuality: _selectedVideoQuality,
         audioQuality: _selectedAudioQuality,
+        thumbnail: widget.info.thumbnail,
+        playlist: _downloadPlaylist,
       );
       if (!mounted) return;
 
@@ -273,10 +350,12 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
         platform: widget.info.platform,
         icon: widget.info.icon,
         title: widget.info.title,
-        format: _selectedFormat,
+        // Playlist bundles are ZIP archives — label them as documents.
+        format: _downloadPlaylist ? 'doc' : _selectedFormat,
         quality: _selectedFormat == 'audio'
             ? _selectedAudioQuality
             : _selectedVideoQuality,
+        thumbnailUrl: widget.info.thumbnail,
       );
       Provider.of<AppState>(context, listen: false).addDownload(task);
       try {
