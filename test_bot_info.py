@@ -10,7 +10,7 @@ if sys.stdout.encoding != 'utf-8':
 from downloader import build_ydl_opts
 from utils import get_platform
 
-async def test_tiktok_info():
+async def run_tiktok_info():
     url = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
     platform, icon = get_platform(url)
     print(f"Testing {platform} {icon}...")

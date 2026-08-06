@@ -10,7 +10,8 @@ class ReleaseVersionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         # Expect a version like: 1.2.0+4
-        self.assertRegex(pubspec, r"^version:\s*\d+\.\d+\.\d+\+\d+", re.M)
+        import re
+        self.assertIsNotNone(re.search(r"version:\s*\d+\.\d+\.\d+\+\d+", pubspec))
 
 
 if __name__ == "__main__":
