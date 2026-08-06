@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/download_task.dart';
+import '../services/api_client.dart';
 import '../services/app_state.dart';
 import 'home_screen.dart';
+import 'player_screen.dart';
 
 class DownloadProgressScreen extends StatefulWidget {
   final String taskId;
@@ -25,9 +27,12 @@ class DownloadProgressScreen extends StatefulWidget {
 class _DownloadProgressScreenState extends State<DownloadProgressScreen>
     with TickerProviderStateMixin {
   Timer? _pollTimer;
+  StreamSubscription<DownloadTask>? _statusSub;
+  bool _usingStream = false;
   DownloadTask? _currentTask;
   bool _isSaving = false;
   String? _savedPath;
+  String? _fatalError;
   DateTime? _downloadStarted;
 
   // Success animation controller
@@ -54,40 +59,132 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _statusSub?.cancel();
     _successCtrl.dispose();
     super.dispose();
   }
 
+  /// Live updates via SSE when available; a 3s polling timer stays on as a
+  /// fallback (and takes over automatically if the stream drops).
   void _startPolling() {
-    _pollTimer =
-        Timer.periodic(const Duration(seconds: 2), (_) => _pollStatus());
+    _connectStream();
+    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!_usingStream) _pollStatus();
+    });
+  }
+
+  void _connectStream() {
+    try {
+      final api = context.read<AppState>().client;
+      _statusSub = api
+          .getDownloadStatusStream(widget.taskId, url: widget.task.url)
+          .listen(
+        _onStatus,
+        onError: (Object error) {
+          if (!mounted) return;
+          _usingStream = false;
+          // Auth failures are fatal — stop and tell the user how to fix it.
+          if (error is ApiException && error.isAuthError) {
+            _pollTimer?.cancel();
+            _statusSub?.cancel();
+            setState(() => _fatalError = error.message);
+            _showError('Connection issue', error);
+          }
+        },
+        onDone: () => _usingStream = false,
+      );
+      _usingStream = true;
+    } catch (_) {
+      _usingStream = false;
+    }
+  }
+
+  void _onStatus(DownloadTask updated) {
+    if (!mounted) return;
+    if (_fatalError != null) setState(() => _fatalError = null);
+
+    final wasNotCompleted = _currentTask?.status != DownloadStatus.completed;
+    // Older servers don't echo the thumbnail — keep the one captured when
+    // the download was started so the player artwork survives.
+    if (updated.thumbnailUrl == null) {
+      updated.thumbnailUrl = widget.task.thumbnailUrl;
+    }
+    setState(() => _currentTask = updated);
+    context.read<AppState>().updateDownload(widget.taskId, updated);
+
+    if (updated.status == DownloadStatus.completed ||
+        updated.status == DownloadStatus.failed) {
+      _pollTimer?.cancel();
+      _statusSub?.cancel();
+      if (wasNotCompleted && updated.status == DownloadStatus.completed) {
+        _successCtrl.forward();
+      }
+      // The background worker may have already saved the file while the
+      // foreground screen was polling — surface it instead of re-downloading.
+      if (updated.status == DownloadStatus.completed && _savedPath == null) {
+        final alreadySaved = context
+            .read<AppState>()
+            .downloads
+            .where((t) =>
+                t.taskId == widget.taskId && t.localPath != null)
+            .firstOrNull;
+        if (alreadySaved?.localPath != null) {
+          setState(() => _savedPath = alreadySaved!.localPath);
+        }
+      }
+    }
   }
 
   Future<void> _pollStatus() async {
     try {
-      // ✅ FIX: access ApiClient through AppState — it's not provided separately
       final api = context.read<AppState>().client;
       final updated = await api.getDownloadStatus(
         widget.taskId,
         url: widget.task.url,
       );
       if (!mounted) return;
-
-      final wasNotCompleted =
-          _currentTask?.status != DownloadStatus.completed;
-      setState(() => _currentTask = updated);
-      context.read<AppState>().updateDownload(widget.taskId, updated);
-
-      if (updated.status == DownloadStatus.completed ||
-          updated.status == DownloadStatus.failed) {
+      _onStatus(updated);
+    } on ApiException catch (error) {
+      // Auth failures are fatal — stop the silent retry loop.
+      if (error.isAuthError) {
         _pollTimer?.cancel();
-        if (wasNotCompleted &&
-            updated.status == DownloadStatus.completed) {
-          _successCtrl.forward();
+        if (mounted) {
+          setState(() => _fatalError = error.message);
+          _showError('Connection issue', error);
         }
       }
+      // Other transient errors — retry next cycle
     } catch (_) {
       // Polling error — retry next cycle
+    }
+  }
+
+  /// Re-run a failed download on the server and resume watching it.
+  Future<void> _retryDownload() async {
+    setState(() => _fatalError = null);
+    try {
+      final api = context.read<AppState>().client;
+      await api.retryDownload(widget.taskId);
+      if (!mounted) return;
+      setState(() {
+        _currentTask?.status = DownloadStatus.pending;
+        _currentTask?.progress = 0;
+        _currentTask?.error = null;
+      });
+      _startPolling();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _fatalError = e.message);
+      _showError('Retry failed', e);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _fatalError = e.toString());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Retry failed: ${e.toString()}'),
+          backgroundColor: const Color(0xFFC62828),
+        ),
+      );
     }
   }
 
@@ -95,7 +192,12 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
     setState(() => _isSaving = true);
     try {
       final api = context.read<AppState>().client;
-      final path = await api.downloadFile(widget.taskId);
+      // Server-provided filename keeps the real extension (mp3/mp4/webm...)
+      // so the saved file plays correctly in the media player.
+      final path = await api.downloadFile(
+        widget.taskId,
+        filename: _currentTask?.filename,
+      );
       if (!mounted) return;
 
       final task = _currentTask;
@@ -109,6 +211,10 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
         _savedPath = path;
         _isSaving = false;
       });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      _showError('Save failed', e);
     } catch (e) {
       if (!mounted) return;
       setState(() => _isSaving = false);
@@ -119,6 +225,51 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
         ),
       );
     }
+  }
+
+  /// Human-friendly error with an action when the fix is a UI decision.
+  void _showError(String title, ApiException error) {
+    final String message;
+    final String? actionLabel;
+    final VoidCallback? action;
+    if (error.isAuthError) {
+      message =
+          'API key rejected by the server. Update it in Home → ⚙️ Server Settings.';
+      actionLabel = 'Back';
+      action = () => Navigator.pop(context);
+    } else if (error.isOutOfCredits) {
+      message = 'No credits left — claim your daily reward in the Profile tab.';
+      actionLabel = 'Back';
+      action = () => Navigator.pop(context);
+    } else {
+      message = error.message;
+      actionLabel = null;
+      action = null;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('❌ $title: $message'),
+        backgroundColor: const Color(0xFFC62828),
+        action: action == null
+            ? null
+            : SnackBarAction(label: actionLabel!, onPressed: action),
+      ),
+    );
+  }
+
+  Future<void> _openPlayer(String path, DownloadTask task) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PlayerScreen(
+          filePath: path,
+          title: task.title,
+          format: task.format,
+          artist: task.format == 'audio' ? task.platform : null,
+          artworkUrl: task.thumbnailUrl,
+        ),
+      ),
+    );
   }
 
   Future<void> _shareFile(String filePath, String title) async {
@@ -180,6 +331,11 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
             children: [
               // ── Status icon ──────────────────────────────
               _buildStatusWidget(task, theme, primary),
+
+              if (_fatalError != null) ...[
+                const SizedBox(height: 20),
+                _InlineError(message: _fatalError!),
+              ],
 
               const SizedBox(height: 28),
 
@@ -273,6 +429,7 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
                 if (_savedPath != null) ...[
                   _SavedCard(
                     path: _savedPath!,
+                    onPlay: () => _openPlayer(_savedPath!, task),
                     onShare: () =>
                         _shareFile(_savedPath!, task.title),
                   ),
@@ -296,9 +453,9 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
                       Expanded(
                         child: FilledButton.icon(
                           onPressed: () =>
-                              _shareFile(_savedPath!, task.title),
-                          icon: const Icon(Icons.share),
-                          label: const Text('Share'),
+                              _openPlayer(_savedPath!, task),
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: const Text('Play'),
                         ),
                       ),
                     ],
@@ -360,7 +517,17 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
                     ),
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: FilledButton.icon(
+                    onPressed: _retryDownload,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Retry download'),
+                  ),
+                ),
+                const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: () => Navigator.pushAndRemoveUntil(
                     context,
@@ -467,12 +634,47 @@ class _DownloadProgressScreenState extends State<DownloadProgressScreen>
   }
 }
 
+// ── Inline fatal error ─────────────────────────────────────
+class _InlineError extends StatelessWidget {
+  final String message;
+
+  const _InlineError({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFFC62828).withValues(alpha: 0.12),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            const Icon(Icons.key_off_rounded,
+                size: 20, color: Color(0xFFFF8A65)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Saved card ────────────────────────────────────────────
 class _SavedCard extends StatelessWidget {
   final String path;
+  final VoidCallback onPlay;
   final VoidCallback onShare;
 
-  const _SavedCard({required this.path, required this.onShare});
+  const _SavedCard({
+    required this.path,
+    required this.onPlay,
+    required this.onShare,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -496,10 +698,21 @@ class _SavedCard extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 12),
         ),
-        trailing: IconButton(
-          icon: const Icon(Icons.share, color: Colors.blue),
-          onPressed: onShare,
-          tooltip: 'Share',
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.play_circle_fill_rounded,
+                  color: Color(0xFFFF8A65)),
+              onPressed: onPlay,
+              tooltip: 'Play',
+            ),
+            IconButton(
+              icon: const Icon(Icons.share, color: Colors.blue),
+              onPressed: onShare,
+              tooltip: 'Share',
+            ),
+          ],
         ),
       ),
     );

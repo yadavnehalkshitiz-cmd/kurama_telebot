@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import '../services/app_state.dart';
 import '../services/api_client.dart';
+import '../services/media_library.dart';
 import '../widgets/connection_banner.dart';
 import 'video_info_screen.dart';
 import 'downloads_screen.dart';
+import 'player_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,8 +22,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _urlController = TextEditingController();
   bool _isLoading = false;
-  bool _isConnected = false;
+  ConnectionStatus _connectionStatus = ConnectionStatus.offline;
   bool _checkingConnection = true;
+  bool _promptedForKey = false;
+  String? _pendingFetchUrl;
   StreamSubscription? _intentSubscription;
 
   @override
@@ -47,7 +52,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ReceiveSharingIntent.instance.getMediaStream().listen((value) {
         if (value.isNotEmpty) {
           for (var file in value) {
-            _handleSharedUrl(file.path);
+            _handleSharedItem(file.path);
           }
         }
       }, onError: (err) {
@@ -58,7 +63,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ReceiveSharingIntent.instance.getInitialMedia().then((value) {
         if (value.isNotEmpty) {
           for (var file in value) {
-            _handleSharedUrl(file.path);
+            _handleSharedItem(file.path);
           }
         }
       }).catchError((err) {
@@ -67,6 +72,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('ReceiveSharingIntent not supported on this platform: $e');
     }
+  }
+
+  void _handleSharedItem(String path) {
+    // Local media files shared into the app are imported + played; text and
+    // links go through the normal URL flow.
+    if (isMediaFile(path) && File(path).existsSync()) {
+      _handleSharedMediaFile(path);
+      return;
+    }
+    _handleSharedUrl(path);
+  }
+
+  Future<void> _handleSharedMediaFile(String path) async {
+    final state = context.read<AppState>();
+    final task = await importLocalFile(state, path);
+    if (!mounted) return;
+    if (task == null || task.localPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('⚠️ Could not import that file')),
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PlayerScreen(
+          filePath: task.localPath!,
+          title: task.title,
+          format: task.format,
+          artist: task.format == 'audio' ? task.platform : null,
+        ),
+      ),
+    );
   }
 
   void _handleSharedUrl(String text) {
@@ -107,22 +145,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _checkConnection() async {
     setState(() => _checkingConnection = true);
     final client = context.read<AppState>().client;
-    final ok = await client.healthCheck();
-    if (mounted) {
-      setState(() {
-        _isConnected = ok;
-        _checkingConnection = false;
-      });
+    final status = await client.checkConnection();
+    if (!mounted) return;
+    setState(() {
+      _connectionStatus = status;
+      _checkingConnection = false;
+    });
+    // Fresh installs ship a placeholder API key: `/api/health` still answers
+    // 200 so the app used to look "connected" while every request 401'd.
+    // Prompt for the real key once instead of leaving the user confused.
+    if (!_promptedForKey && status == ConnectionStatus.invalidKey) {
+      final key = client.apiKey;
+      if (key.isEmpty || key == 'changeme-in-production') {
+        _promptedForKey = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showConfigDialog();
+        });
+      }
     }
   }
 
   // ── Server config dialog ─────────────────────────────────
 
-  void _showConfigDialog() {
+  void _showConfigDialog({String? url, String? key}) {
     final state = context.read<AppState>();
     final api = state.client;
-    final urlController = TextEditingController(text: api.baseUrl);
-    final keyController = TextEditingController(text: api.apiKey);
+    final urlController = TextEditingController(text: url ?? api.baseUrl);
+    final keyController = TextEditingController(text: key ?? api.apiKey);
     bool saving = false;
 
     showDialog(
@@ -149,6 +198,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 decoration: const InputDecoration(
                   labelText: 'API Key',
                   prefixIcon: Icon(Icons.key_outlined),
+                  helperText: 'Same as KURAMA_API_KEY on your server',
                 ),
                 obscureText: true,
               ),
@@ -168,13 +218,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         baseUrl: urlController.text.trim(),
                         apiKey: keyController.text.trim(),
                       );
-                      final ok = await newClient.healthCheck();
+                      final status = await newClient.checkConnection();
                       if (!mounted) return;
                       if (!ctx.mounted) return;
-                      if (ok) {
+                      if (status == ConnectionStatus.connected) {
                         context.read<AppState>().updateClient(newClient);
                         Navigator.pop(ctx);
-                        setState(() => _isConnected = true);
+                        setState(
+                          () => _connectionStatus = ConnectionStatus.connected,
+                        );
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
@@ -183,11 +235,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ),
                           );
                         }
+                        // Auto-retry the link that failed with the old key.
+                        final pending = _pendingFetchUrl;
+                        if (pending != null) {
+                          _pendingFetchUrl = null;
+                          _fetchInfo(pending);
+                        }
+                      } else if (status == ConnectionStatus.invalidKey) {
+                        setDialogState(() => saving = false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                '❌ Server reached, but the API key was rejected'),
+                            backgroundColor: Color(0xFFC62828),
+                          ),
+                        );
                       } else {
                         setDialogState(() => saving = false);
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
-                            content: Text('❌ Could not reach server'),
+                            content: Text(
+                                '❌ Could not reach server. Check URL and network.'),
                             backgroundColor: Color(0xFFC62828),
                           ),
                         );
@@ -231,8 +299,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _fetchInfo() async {
-    final rawText = _urlController.text.trim();
+  Future<void> _fetchInfo([String? overrideUrl]) async {
+    final rawText = overrideUrl ?? _urlController.text.trim();
     final url = _extractFirstUrl(rawText) ?? rawText;
 
     if (url.isEmpty) {
@@ -253,6 +321,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final api = context.read<AppState>().client;
       final info = await api.fetchInfo(url);
+      _pendingFetchUrl = null;
 
       if (!mounted) return;
       Navigator.push(
@@ -261,6 +330,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     } catch (e) {
       if (!mounted) return;
+      if (e is ApiException && e.isAuthError) {
+        // The server is reachable but rejected the key — flip the banner to
+        // "Fix Key" and open Server Settings once so the user can paste the
+        // correct key instead of hitting a dead-end error snackbar. The URL
+        // is remembered so the fetch auto-retries after the key is fixed.
+        setState(() => _connectionStatus = ConnectionStatus.invalidKey);
+        _pendingFetchUrl = url;
+        if (!_promptedForKey) {
+          _promptedForKey = true;
+          _showConfigDialog();
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content:
+                Text('❌ API key rejected — update it in Server Settings'),
+            backgroundColor: Color(0xFFC62828),
+          ),
+        );
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('❌ ${e.toString()}'),
@@ -313,26 +403,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     height: 10,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _isConnected
-                          ? const Color(0xFF4CAF50)
-                          : const Color(0xFFFF8A65),
-                      boxShadow: [
-                        BoxShadow(
-                          color: (_isConnected
-                                  ? const Color(0xFF4CAF50)
-                                  : const Color(0xFFFF8A65))
-                              .withValues(alpha: 0.6),
-                          blurRadius: 6,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                  ),
+                : _StatusDot(status: _connectionStatus),
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
@@ -351,11 +422,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       body: Column(
         children: [
-          // Connection offline banner
+          // Connection status banner
           ConnectionBanner(
-            isConnected: _isConnected,
+            status: _connectionStatus,
             serverUrl: context.read<AppState>().client.baseUrl,
             onTapSettings: _showConfigDialog,
+            onUseCloud: () => _showConfigDialog(
+              url: 'https://kurama-telebot.onrender.com',
+            ),
+            onRetry: _checkConnection,
           ),
 
           // ── Hero section ──────────────────────────────────
@@ -621,6 +696,38 @@ class _PlatformChip extends StatelessWidget {
               color: Colors.white70,
               fontWeight: FontWeight.w500,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Connection status dot ──────────────────────────────────
+class _StatusDot extends StatelessWidget {
+  final ConnectionStatus status;
+
+  const _StatusDot({required this.status});
+
+  Color get _color => switch (status) {
+        ConnectionStatus.connected => const Color(0xFF4CAF50),
+        ConnectionStatus.invalidKey => const Color(0xFFFFB300),
+        ConnectionStatus.offline => const Color(0xFFFF8A65),
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: _color,
+        boxShadow: [
+          BoxShadow(
+            color: _color.withValues(alpha: 0.6),
+            blurRadius: 6,
+            spreadRadius: 1,
           ),
         ],
       ),

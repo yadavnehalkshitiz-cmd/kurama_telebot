@@ -135,6 +135,10 @@ if not _raw_api_key or _raw_api_key == "changeme-in-production":
 else:
     API_AUTH_KEY = _raw_api_key
 
+# Optional separate key for admin endpoints (task list / purge).
+# When unset, admin endpoints accept the main API key.
+API_ADMIN_KEY = os.getenv("KURAMA_ADMIN_KEY") or None
+
 # Default API binding (0.0.0.0 for cloud hosting, PORT env var from platform)
 API_HOST = os.getenv("API_HOST") or "0.0.0.0"
 API_PORT = int(os.getenv("PORT") or os.getenv("API_PORT") or "8000")

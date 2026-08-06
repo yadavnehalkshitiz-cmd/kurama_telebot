@@ -1,33 +1,95 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+
 import '../models/download_task.dart';
+import '../models/playback_entry.dart';
+import '../services/api_client.dart';
 import '../services/app_state.dart';
+import '../services/media_library.dart';
+import '../services/storage_manager.dart';
 import '../services/vault_cipher.dart';
 import '../services/vault_key_store.dart';
 import '../services/vault_service.dart';
 import 'player_screen.dart';
-import 'package:intl/intl.dart';
 
-class DownloadsScreen extends StatelessWidget {
+class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final downloads = context
+  State<DownloadsScreen> createState() => _DownloadsScreenState();
+}
+
+class _DownloadsScreenState extends State<DownloadsScreen> {
+  String _query = '';
+  String _formatFilter = 'all'; // all | video | audio | doc
+  bool _newestFirst = true;
+  bool _searchOpen = false;
+  StorageSummary? _storage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStorage();
+  }
+
+  Future<void> _loadStorage() async {
+    StorageSummary? summary;
+    try {
+      summary = await StorageManager.scan(context.read<AppState>().downloads);
+    } catch (_) {
+      // A failed scan shouldn't break the Downloads tab.
+    }
+    if (mounted) setState(() => _storage = summary);
+  }
+
+  bool get _hasOffloadable {
+    final downloads = context.read<AppState>().downloads;
+    return downloads.any((t) =>
+        !t.isPrivate &&
+        !t.taskId.startsWith('local_') &&
+        t.localPath != null &&
+        t.localPath!.isNotEmpty &&
+        File(t.localPath!).existsSync());
+  }
+
+  List<DownloadTask> get _visibleDownloads {
+    final all = context
         .watch<AppState>()
         .downloads
         .where((task) => !task.isPrivate)
         .toList();
-    final failedCount = downloads.where((t) => t.status == DownloadStatus.failed).length;
+    final q = _query.trim().toLowerCase();
+    final filtered = all.where((task) {
+      if (_formatFilter != 'all' && task.format != _formatFilter) return false;
+      if (q.isEmpty) return true;
+      return task.title.toLowerCase().contains(q) ||
+          task.platform.toLowerCase().contains(q);
+    }).toList();
+    filtered.sort((a, b) => _newestFirst
+        ? b.createdAt.compareTo(a.createdAt)
+        : a.createdAt.compareTo(b.createdAt));
+    return filtered;
+  }
+
+  int get _failedCount {
+    final all = context.read<AppState>().downloads;
+    return all.where((t) => t.status == DownloadStatus.failed).length;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final downloads = _visibleDownloads;
+    final failedCount = _failedCount;
+    final allCount = context.watch<AppState>().downloads.length;
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          downloads.isEmpty
-              ? 'Downloads'
-              : 'Downloads (${downloads.length})',
+          allCount == 0 ? 'Downloads' : 'Downloads ($allCount)',
         ),
         centerTitle: true,
         actions: [
@@ -38,19 +100,123 @@ class DownloadsScreen extends StatelessWidget {
               label: Text('Clear $failedCount failed'),
               style: TextButton.styleFrom(foregroundColor: Colors.red),
             ),
+          IconButton(
+            tooltip: 'Import local file',
+            icon: const Icon(Icons.library_add_outlined),
+            onPressed: () => _importLocalFile(context),
+          ),
+          IconButton(
+            tooltip: 'Search',
+            icon: Icon(_searchOpen ? Icons.close_rounded : Icons.search_rounded),
+            onPressed: () => setState(() {
+              _searchOpen = !_searchOpen;
+              if (!_searchOpen) _query = '';
+            }),
+          ),
         ],
       ),
-      body: downloads.isEmpty
-          ? _EmptyState()
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: downloads.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (context, index) {
-                final task = downloads[index];
-                return _DownloadCard(task: task);
-              },
+      body: Column(
+        children: [
+          if (_searchOpen)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: TextField(
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Search downloads…',
+                  prefixIcon: Icon(Icons.search_rounded),
+                  isDense: true,
+                ),
+                onChanged: (v) => setState(() => _query = v),
+              ),
             ),
+          if (downloads.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _FilterChip(
+                            label: 'All',
+                            selected: _formatFilter == 'all',
+                            onTap: () => setState(() => _formatFilter = 'all'),
+                          ),
+                          const SizedBox(width: 6),
+                          _FilterChip(
+                            label: '🎬 Video',
+                            selected: _formatFilter == 'video',
+                            onTap: () =>
+                                setState(() => _formatFilter = 'video'),
+                          ),
+                          const SizedBox(width: 6),
+                          _FilterChip(
+                            label: '🎵 Audio',
+                            selected: _formatFilter == 'audio',
+                            onTap: () =>
+                                setState(() => _formatFilter = 'audio'),
+                          ),
+                          const SizedBox(width: 6),
+                          _FilterChip(
+                            label: '📦 Doc',
+                            selected: _formatFilter == 'doc',
+                            onTap: () => setState(() => _formatFilter = 'doc'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: _newestFirst ? 'Newest first' : 'Oldest first',
+                    icon: Icon(
+                      _newestFirst
+                          ? Icons.arrow_downward_rounded
+                          : Icons.arrow_upward_rounded,
+                      size: 18,
+                    ),
+                    onPressed: () =>
+                        setState(() => _newestFirst = !_newestFirst),
+                  ),
+                ],
+              ),
+            ),
+          if (_storage != null &&
+              (_storage!.usedBytes > 0 || _storage!.hasCleanup)) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _StorageCard(
+                summary: _storage!,
+                onSweep: _storage!.hasCleanup
+                    ? () => _sweepOrphans(context)
+                    : null,
+                onOffload: _hasOffloadable
+                    ? () => _offloadFiles(context)
+                    : null,
+              ),
+            ),
+          ],
+          Expanded(
+            child: downloads.isEmpty
+                ? _EmptyState(queryActive: _query.isNotEmpty)
+                : ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: downloads.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final task = downloads[index];
+                      return _DownloadCard(
+                        task: task,
+                        onPlayQueue: () => _playQueue(context, task),
+                        onLibraryChanged: _loadStorage,
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -58,15 +224,218 @@ class DownloadsScreen extends StatelessWidget {
     final state = context.read<AppState>();
     final failed = state.downloads
         .where((t) => t.status == DownloadStatus.failed)
-        .map((t) => t.taskId)
         .toList();
-    for (final id in failed) {
-      state.removeDownload(id);
+    for (final task in failed) {
+      state.removeDownload(task.taskId);
+      // Best-effort: drop any partial transfer left on disk.
+      state.client
+          .deletePartialFile(filename: task.filename, taskId: task.taskId);
     }
+    _loadStorage();
+  }
+
+  Future<void> _sweepOrphans(BuildContext context) async {
+    final summary = _storage;
+    final count = summary?.orphanCount ?? 0;
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Sweep orphan files?'),
+            content: Text(
+              'Deletes $count unreferenced file${count == 1 ? '' : 's'} '
+              '(${formatBytes(summary?.orphanBytes ?? 0)}) left over from '
+              'interrupted or deleted downloads.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Sweep'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    final freed = await StorageManager.cleanupOrphans(
+        context.read<AppState>().downloads);
+    if (!mounted) return;
+    _message(context,
+        freed > 0 ? '🧹 Freed ${formatBytes(freed)}' : 'Nothing to sweep');
+    _loadStorage();
+  }
+
+  Future<void> _offloadFiles(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Offload media files?'),
+            content: const Text(
+              'Deletes the downloaded media files but keeps them in your '
+              'history so you can re-download any of them later. Private '
+              'vault items and locally imported originals are kept.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Offload'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    final state = context.read<AppState>();
+    final removed = await StorageManager.offloadSavedFiles(state.downloads);
+    for (final task in removed) {
+      state.updateDownload(task.taskId, task);
+    }
+    if (!mounted) return;
+    _message(
+      context,
+      removed.isEmpty
+          ? 'No files to offload'
+          : '🗑 Offloaded ${removed.length} file${removed.length == 1 ? '' : 's'} — history kept',
+    );
+    _loadStorage();
+  }
+
+  /// Builds a playback queue from all playable downloads, starting at [task].
+  void _playQueue(BuildContext context, DownloadTask task) {
+    final playable = context
+        .read<AppState>()
+        .downloads
+        .where((t) =>
+            !t.isPrivate &&
+            t.status == DownloadStatus.completed &&
+            t.localPath != null &&
+            File(t.localPath!).existsSync())
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final index = playable.indexWhere((t) => t.taskId == task.taskId);
+    if (index < 0) {
+      _message(context, 'File not found on this device');
+      return;
+    }
+    final entries = playable
+        .map((t) => PlaybackEntry(
+              path: t.localPath!,
+              title: t.title,
+              format: t.format,
+              artist: t.format == 'audio' ? t.platform : null,
+              artworkUrl: t.thumbnailUrl,
+            ))
+        .toList();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PlayerScreen(
+          filePath: entries[index].path,
+          title: entries[index].title,
+          format: entries[index].format,
+          artist: entries[index].artist,
+          artworkUrl: entries[index].artworkUrl,
+          entries: entries,
+          initialIndex: index,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _importLocalFile(BuildContext context) async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowMultiple: false,
+      allowedExtensions: const [
+        'mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg', 'opus', 'wma',
+        'mp4', 'mkv', 'webm', 'mov', 'avi', '3gp', 'm4v',
+      ],
+    );
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.single.path;
+    if (path == null) {
+      _message(context, 'Could not read that file');
+      return;
+    }
+    final state = context.read<AppState>();
+    final task = await importLocalFile(state, path);
+    if (!mounted) return;
+    if (task == null) {
+      _message(context, 'Unsupported file type');
+      return;
+    }
+    _loadStorage();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('✅ Imported ${task.title}'),
+        action: SnackBarAction(
+          label: 'Play',
+          onPressed: () => _playQueue(context, task),
+        ),
+      ),
+    );
+  }
+
+  void _message(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? primary.withValues(alpha: 0.22)
+              : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected
+                ? primary
+                : Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? primary : Colors.white70,
+          ),
+        ),
+      ),
+    );
   }
 }
 
 class _EmptyState extends StatelessWidget {
+  final bool queryActive;
+
+  const _EmptyState({this.queryActive = false});
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -75,13 +444,13 @@ class _EmptyState extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            Icons.download_outlined,
+            queryActive ? Icons.search_off_rounded : Icons.download_outlined,
             size: 72,
             color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.25),
           ),
           const SizedBox(height: 20),
           Text(
-            'No downloads yet',
+            queryActive ? 'No matches' : 'No downloads yet',
             style: theme.textTheme.titleMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
               fontWeight: FontWeight.w600,
@@ -89,7 +458,10 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Paste a link on the home screen to start',
+            queryActive
+                ? 'Try a different search or filter'
+                : 'Paste a link on Home, or import a local file with the + button',
+            textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
             ),
@@ -102,8 +474,16 @@ class _EmptyState extends StatelessWidget {
 
 class _DownloadCard extends StatelessWidget {
   final DownloadTask task;
+  final VoidCallback onPlayQueue;
 
-  const _DownloadCard({required this.task});
+  /// Refreshes the storage summary after file-affecting actions.
+  final VoidCallback onLibraryChanged;
+
+  const _DownloadCard({
+    required this.task,
+    required this.onPlayQueue,
+    required this.onLibraryChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -133,6 +513,12 @@ class _DownloadCard extends StatelessWidget {
       ),
       onDismissed: (_) {
         context.read<AppState>().removeDownload(task.taskId);
+        // Drop any partial transfer left on disk.
+        context.read<AppState>().client.deletePartialFile(
+              filename: task.filename,
+              taskId: task.taskId,
+            );
+        onLibraryChanged();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Removed'),
@@ -144,15 +530,7 @@ class _DownloadCard extends StatelessWidget {
         child: ListTile(
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          leading: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: statusColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(statusIcon, color: statusColor, size: 22),
-          ),
+          leading: _CardThumbnail(task: task, statusColor: statusColor, statusIcon: statusIcon),
           title: Text(
             task.title,
             maxLines: 1,
@@ -212,6 +590,19 @@ class _DownloadCard extends StatelessWidget {
 
   Widget _buildTrailing(BuildContext context, Color statusColor) {
     if (task.status == DownloadStatus.completed) {
+      final saved = task.localPath != null &&
+          File(task.localPath!).existsSync();
+      // Completed on the server but not on this device (interrupted save):
+      // offer a resume action that continues the transfer via Range requests
+      // instead of forcing a full re-download.
+      if (!saved) {
+        return IconButton(
+          icon: const Icon(Icons.download_for_offline_outlined),
+          color: const Color(0xFFFF8A65),
+          tooltip: 'Save / Resume download',
+          onPressed: () => _saveToDevice(context),
+        );
+      }
       return PopupMenuButton<String>(
         tooltip: 'Media actions',
         onSelected: (action) => _handleAction(context, action),
@@ -225,11 +616,22 @@ class _DownloadCard extends StatelessWidget {
       );
     }
     if (task.status == DownloadStatus.failed) {
-      return IconButton(
-        icon: const Icon(Icons.delete_outline),
-        color: Colors.red,
-        onPressed: () => context.read<AppState>().removeDownload(task.taskId),
-        tooltip: 'Remove',
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            color: const Color(0xFFFF8A65),
+            tooltip: 'Retry download',
+            onPressed: () => _retry(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            color: Colors.red,
+            onPressed: () => context.read<AppState>().removeDownload(task.taskId),
+            tooltip: 'Remove',
+          ),
+        ],
       );
     }
     // Pending / downloading — spinner
@@ -244,6 +646,75 @@ class _DownloadCard extends StatelessWidget {
     );
   }
 
+  /// Re-runs a failed download on the server.
+  Future<void> _retry(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final state = context.read<AppState>();
+    try {
+      await state.client.retryDownload(task.taskId);
+      if (!context.mounted) return;
+      task
+        ..status = DownloadStatus.pending
+        ..progress = 0
+        ..error = null;
+      state.updateDownload(task.taskId, task);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('🔄 Retrying download…')),
+      );
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('❌ ${e.message}'),
+          backgroundColor: const Color(0xFFC62828),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('❌ Retry failed: ${e.toString()}'),
+          backgroundColor: const Color(0xFFC62828),
+        ),
+      );
+    }
+  }
+
+  /// Saves (or resumes) the completed download to the device. Interrupted
+  /// transfers continue from their partial file via HTTP Range requests.
+  Future<void> _saveToDevice(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final api = context.read<AppState>().client;
+      final path = await api.downloadFile(task.taskId, filename: task.filename);
+      if (!context.mounted) return;
+      task
+        ..localPath = path
+        ..isSavedLocally = true;
+      context.read<AppState>().updateDownload(task.taskId, task);
+      onLibraryChanged();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('✅ Saved to device')),
+      );
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('❌ ${e.message}'),
+          backgroundColor: const Color(0xFFC62828),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('❌ Save failed: ${e.toString()}'),
+          backgroundColor: const Color(0xFFC62828),
+        ),
+      );
+    }
+  }
+
   Future<void> _handleAction(BuildContext context, String action) async {
     if (action == 'share') return _shareFile(context, task);
     if (action == 'play') {
@@ -252,16 +723,7 @@ class _DownloadCard extends StatelessWidget {
         _message(context, 'File not found on this device');
         return;
       }
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => PlayerScreen(
-            filePath: path,
-            title: task.title,
-            format: task.format,
-          ),
-        ),
-      );
+      onPlayQueue();
       return;
     }
     if (action == 'vault') {
@@ -303,12 +765,19 @@ class _DownloadCard extends StatelessWidget {
           ) ??
           false;
       if (!confirmed || !context.mounted) return;
+      final state = context.read<AppState>();
       final path = task.localPath;
       if (path != null) {
         final file = File(path);
         if (await file.exists()) await file.delete();
       }
-      if (context.mounted) context.read<AppState>().removeDownload(task.taskId);
+      // Drop any partial transfer left on disk too.
+      await state.client.deletePartialFile(
+        filename: task.filename,
+        taskId: task.taskId,
+      );
+      if (context.mounted) state.removeDownload(task.taskId);
+      onLibraryChanged();
     }
   }
 
@@ -396,4 +865,121 @@ class _DownloadCard extends StatelessWidget {
       );
     }
   }
+}
+
+class _StorageCard extends StatelessWidget {
+  final StorageSummary summary;
+  final VoidCallback? onSweep;
+  final VoidCallback? onOffload;
+
+  const _StorageCard({
+    required this.summary,
+    this.onSweep,
+    this.onOffload,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.sd_storage_rounded,
+                    size: 20, color: Color(0xFFFF8A65)),
+                const SizedBox(width: 8),
+                Text(
+                  'Storage',
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                Text(
+                  formatBytes(summary.usedBytes),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFFFFA060),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${summary.downloadCount} downloaded file'
+              '${summary.downloadCount == 1 ? '' : 's'}',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: Colors.white54),
+            ),
+            if (summary.orphanCount > 0) ...[
+              const SizedBox(height: 6),
+              Text(
+                '🧹 ${summary.orphanCount} orphan'
+                '${summary.orphanCount == 1 ? '' : 's'} · '
+                '${formatBytes(summary.orphanBytes)} can be swept',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: const Color(0xFFFFB74D)),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: onSweep,
+                  icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+                  label: Text(summary.orphanCount > 0
+                      ? 'Sweep orphans'
+                      : 'Sweep'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: onOffload,
+                  icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+                  label: const Text('Offload files'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CardThumbnail extends StatelessWidget {
+  final DownloadTask task;
+  final Color statusColor;
+  final IconData statusIcon;
+
+  const _CardThumbnail({
+    required this.task,
+    required this.statusColor,
+    required this.statusIcon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final thumbnail = task.thumbnailUrl;
+    return Container(
+      width: 44,
+      height: 44,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: statusColor.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: thumbnail != null
+          ? Image.network(
+              thumbnail,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _fallback(),
+            )
+          : _fallback(),
+    );
+  }
+
+  Widget _fallback() => Icon(statusIcon, color: statusColor, size: 22);
 }
