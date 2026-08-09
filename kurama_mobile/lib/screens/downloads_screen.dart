@@ -5,8 +5,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:gal/gal.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../models/download_task.dart';
+import '../models/media_file_type.dart';
 import '../models/playback_entry.dart';
 import '../services/api_client.dart';
 import '../services/app_state.dart';
@@ -606,12 +609,20 @@ class _DownloadCard extends StatelessWidget {
       return PopupMenuButton<String>(
         tooltip: 'Media actions',
         onSelected: (action) => _handleAction(context, action),
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'play', child: Text('Play offline')),
-          PopupMenuItem(value: 'share', child: Text('Share')),
-          PopupMenuItem(value: 'vault', child: Text('Move to private vault')),
-          PopupMenuDivider(),
-          PopupMenuItem(value: 'delete', child: Text('Delete')),
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 'play', child: Text('Play offline')),
+          const PopupMenuItem(value: 'share', child: Text('Share')),
+          if (supportsGalleryExport(task.format))
+            const PopupMenuItem(
+              value: 'gallery',
+              child: Text('Save to Gallery'),
+            ),
+          const PopupMenuItem(
+            value: 'vault',
+            child: Text('Move to private vault'),
+          ),
+          const PopupMenuDivider(),
+          const PopupMenuItem(value: 'delete', child: Text('Delete')),
         ],
       );
     }
@@ -717,6 +728,7 @@ class _DownloadCard extends StatelessWidget {
 
   Future<void> _handleAction(BuildContext context, String action) async {
     if (action == 'share') return _shareFile(context, task);
+    if (action == 'gallery') return _saveToGallery(context, task);
     if (action == 'play') {
       final path = task.localPath;
       if (path == null || !File(path).existsSync()) {
@@ -863,6 +875,50 @@ class _DownloadCard extends StatelessWidget {
           backgroundColor: const Color(0xFFC62828),
         ),
       );
+    }
+  }
+
+  Future<void> _saveToGallery(BuildContext context, DownloadTask task) async {
+    final filePath = task.localPath;
+    if (filePath == null || !File(filePath).existsSync()) {
+      if (!context.mounted) return;
+      _message(context, '❌ File not found on device. Save it first.');
+      return;
+    }
+
+    if (!supportsGalleryExport(task.format)) {
+      if (context.mounted) {
+        _message(
+          context,
+          'Gallery export is available for videos only. Use Share for this file.',
+        );
+      }
+      return;
+    }
+
+    try {
+      // Check permissions
+      var status = await Permission.storage.status;
+      if (status.isDenied) {
+        status = await Permission.storage.request();
+        if (status.isDenied && context.mounted) {
+          _message(context, '⚠️ Storage permission denied');
+          return;
+        }
+      }
+
+      if (!context.mounted) return;
+      _message(context, '⏳ Saving to Gallery…');
+
+      await Gal.putVideo(filePath);
+
+      if (context.mounted) {
+        _message(context, '✅ Saved to Gallery!');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        _message(context, '❌ Gallery save failed: ${e.toString()}');
+      }
     }
   }
 }

@@ -30,13 +30,16 @@ subprojects {
             }
         }
     }
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
+        compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 // AGP 9-aware plugins skip their own Kotlin plugin because they normally use
 // built-in Kotlin. This app temporarily keeps built-in Kotlin disabled for
-// older audio plugins, so explicitly compile the two Kotlin-only libraries.
+// older plugins, so explicitly compile the affected Kotlin libraries.
 subprojects {
-    if (name == "file_picker" || name == "workmanager_android") {
+    if (name == "audio_session" || name == "file_picker" || name == "workmanager_android") {
         pluginManager.apply("org.jetbrains.kotlin.android")
     }
     if (name == "workmanager_android") {

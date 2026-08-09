@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -49,13 +50,38 @@ void main() async {
   final savedUrl = storage.loadServerUrl();
   final savedKey = storage.loadApiKey();
 
+  // Production credentials must be supplied at build time and never committed.
+  const prodKey = String.fromEnvironment('KURAMA_API_KEY');
+  const prodUrl = 'https://kurama-telebot.onrender.com';
+
+  // Smart-detect local server for zero-config development
+  String defaultUrl = prodUrl;
+  if (kDebugMode) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      defaultUrl = 'http://10.0.2.2:3000';
+    } else {
+      defaultUrl = 'http://localhost:3000';
+    }
+  }
+
+  // Force reset if saved values are placeholders or invalid
+  final String effectiveUrl;
+  if (savedUrl == null || savedUrl.isEmpty || savedUrl.contains('changeme')) {
+    effectiveUrl = defaultUrl;
+  } else {
+    effectiveUrl = savedUrl;
+  }
+
+  final String effectiveKey;
+  if (savedKey == null || savedKey.isEmpty || savedKey.contains('changeme')) {
+    effectiveKey = prodKey;
+  } else {
+    effectiveKey = savedKey;
+  }
+
   final apiClient = ApiClient(
-    baseUrl: (savedUrl != null && savedUrl.isNotEmpty)
-        ? savedUrl
-        : 'https://kurama-telebot.onrender.com',
-    apiKey: (savedKey != null && savedKey.isNotEmpty)
-        ? savedKey
-        : 'changeme-in-production',
+    baseUrl: effectiveUrl,
+    apiKey: effectiveKey,
   );
 
   runApp(

@@ -35,3 +35,6 @@ MediaFileType classifyMediaFile({
   if (normalizedFormat == 'video') return MediaFileType.video;
   return MediaFileType.other;
 }
+
+bool supportsGalleryExport(String format) =>
+    format.trim().toLowerCase() == 'video';

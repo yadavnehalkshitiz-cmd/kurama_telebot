@@ -123,22 +123,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return match?.group(0);
   }
 
-  // Auto-paste from clipboard when app comes to foreground
+  // Check clipboard for links when app comes to foreground
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _urlController.text.isEmpty) {
-      _tryAutoFillFromClipboard();
+    if (state == AppLifecycleState.resumed) {
+      _checkClipboardForLink();
     }
   }
 
-  Future<void> _tryAutoFillFromClipboard() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text?.trim() ?? '';
-    final url = _extractFirstUrl(text);
-    if (url != null && url.isNotEmpty) {
-      if (mounted && _urlController.text.isEmpty) {
-        setState(() => _urlController.text = url);
+  Future<void> _checkClipboardForLink() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim() ?? '';
+      final url = _extractFirstUrl(text);
+      if (url != null && url.isNotEmpty) {
+        if (!mounted) return;
+        // If current input is empty, just auto-fill
+        if (_urlController.text.isEmpty) {
+          setState(() => _urlController.text = url);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('📋 Auto-pasted link from clipboard'),
+              action: SnackBarAction(
+                label: 'Fetch',
+                onPressed: _fetchInfo,
+              ),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+          return;
+        }
+        // If it's a DIFFERENT link, show a suggestion snackbar
+        if (_urlController.text != url) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('🔗 Link detected in clipboard'),
+              action: SnackBarAction(
+                label: 'Paste',
+                onPressed: () {
+                  setState(() => _urlController.text = url);
+                  _fetchInfo();
+                },
+              ),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
       }
+    } catch (_) {
+      // Clipboard access might be restricted on some OS versions/states
     }
   }
 

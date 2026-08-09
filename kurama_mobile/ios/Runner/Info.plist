@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Face ID protects media stored in your private Kurama vault.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>KuramaBot needs access to save downloaded videos to your photos app.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
