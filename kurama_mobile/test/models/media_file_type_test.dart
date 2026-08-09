@@ -32,4 +32,13 @@ void main() {
       );
     });
   });
+
+  group('supportsGalleryExport', () {
+    test('allows video and rejects audio and documents', () {
+      expect(supportsGalleryExport('video'), isTrue);
+      expect(supportsGalleryExport(' VIDEO '), isTrue);
+      expect(supportsGalleryExport('audio'), isFalse);
+      expect(supportsGalleryExport('doc'), isFalse);
+    });
+  });
 }

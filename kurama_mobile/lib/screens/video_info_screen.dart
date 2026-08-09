@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../models/video_info.dart';
 import '../models/download_task.dart';
 import '../services/app_state.dart';
@@ -24,6 +25,28 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
   String _selectedVideoQuality = 'best';
   String _selectedAudioQuality = 'best';
   bool _downloadPlaylist = false;
+  bool _isMobileData = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkConnectivity();
+  }
+
+  Future<void> _checkConnectivity() async {
+    try {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (mounted) {
+        setState(() {
+          _isMobileData = connectivity.contains(ConnectivityResult.mobile);
+          // Suggest 720p on mobile data to save space/data
+          if (_isMobileData && _selectedVideoQuality == 'best') {
+            _selectedVideoQuality = '720p';
+          }
+        });
+      }
+    } catch (_) {}
+  }
 
   static const _videoQualities = [
     ('best', '🎯 Best'),
@@ -212,7 +235,39 @@ class _VideoInfoScreenState extends State<VideoInfoScreen> {
 
                   // ── Quality selection ────────────────────
                   if (_selectedFormat == 'video') ...[
-                    const _SectionLabel('Video Quality'),
+                    Row(
+                      children: [
+                        const _SectionLabel('Video Quality'),
+                        if (_isMobileData) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                  color: Colors.orange.withValues(alpha: 0.4)),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.signal_cellular_alt,
+                                    size: 10, color: Colors.orangeAccent),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Data Saver Active',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: Colors.orangeAccent,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                     const SizedBox(height: 10),
                     _QualityGrid(
                       qualities: _videoQualities,

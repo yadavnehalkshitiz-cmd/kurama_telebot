@@ -181,6 +181,20 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   ),
                   onWebViewCreated: (controller) {
                     _webViewController = controller;
+                    // JS Handler for video detection
+                    controller.addJavaScriptHandler(
+                      handlerName: 'videoDetected',
+                      callback: (args) {
+                        if (args.isNotEmpty && mounted) {
+                          // If we haven't detected anything via URL probe yet,
+                          // we can use this signal to show the download prompt.
+                          if (_detectionController.state.phase == BrowserDetectionPhase.unsupported ||
+                              _detectionController.state.phase == BrowserDetectionPhase.idle) {
+                             _detectionController.detect(_urlController.text);
+                          }
+                        }
+                      },
+                    );
                   },
                   onLoadStart: (_, url) {
                     _detectionController.beginNavigation();
@@ -188,8 +202,24 @@ class _BrowserScreenState extends State<BrowserScreen> {
                       setState(() => _urlController.text = url.toString());
                     }
                   },
-                  onLoadStop: (_, url) {
+                  onLoadStop: (controller, url) {
                     if (url == null) return;
+
+                    // Inject video sniffer script
+                    controller.evaluateJavascript(source: """
+                      (function() {
+                        function check() {
+                          var v = document.getElementsByTagName('video');
+                          if (v.length > 0 && v[0].src) {
+                            window.flutter_inappwebview.callHandler('videoDetected', { src: v[0].src });
+                          }
+                        }
+                        var observer = new MutationObserver(check);
+                        observer.observe(document.body, { childList: true, subtree: true });
+                        check();
+                      })();
+                    """);
+
                     final uri = Uri.tryParse(url.toString());
                     if (uri != null && isSafeBrowserUri(uri)) {
                       if (mounted) {

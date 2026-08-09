@@ -4,6 +4,22 @@ A smart Telegram bot that downloads videos from 12+ platforms directly to your *
 
 ---
 
+## 🧰 Tech Stack & Languages
+
+Dart and Python are the primary languages in KuramaBot. Kotlin and Swift are
+used only for native mobile integration, while JVM 17 is the Android build
+target rather than an application language.
+
+| Area | Stack |
+|------|-------|
+| Mobile app | Flutter, Dart |
+| Backend and bot | Python, FastAPI, python-telegram-bot, yt-dlp, Uvicorn |
+| Android | Android 9+ (API 28), Kotlin, Gradle 9.1, AGP 9.0.1, JVM 17 |
+| iOS | Swift |
+| Delivery | Docker, GitHub Actions, Render |
+
+---
+
 ## ✨ Features
 
 - 🎯 **Choose your destination** — Laptop, Mobile, or Both

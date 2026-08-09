@@ -26,7 +26,7 @@ class ApiClient {
   ApiClient({required this.baseUrl, required this.apiKey});
 
   Map<String, String> get _headers => {
-        'Authorization': 'Bearer \',
+        'Authorization': 'Bearer $apiKey',
         'Content-Type': 'application/json',
       };
 
