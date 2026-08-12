@@ -9,7 +9,7 @@
 Separate the current mixed repository into two independently owned products without interrupting the live Telegram bot or losing the working mobile application:
 
 1. Keep the existing `kurama_telebot` GitHub repository and reduce it to the Telegram product.
-2. Create a new `kurama_app` GitHub repository containing the Flutter client, its FastAPI backend, Supabase definitions, app-specific tests, deployment files and release automation.
+2. Preserve and repurpose the existing `yadavnehalkshitiz-cmd/kurama_bot` repository, rename it to `kurama_app`, and make it own the Flutter client, FastAPI backend, Supabase definitions, app-specific tests, deployment files and release automation.
 
 After migration, neither repository imports code, reads runtime files or depends on build artifacts from the other. Similar downloader logic may initially be copied into both products so each can evolve and deploy independently.
 
@@ -30,7 +30,7 @@ kurama_telebot/
 
 This repository owns Telegram commands, Telegram delivery, bot-specific cookies, bot configuration and its own downloader implementation. It does not own Flutter, mobile accounts, the app backend, app billing or app release workflows.
 
-### New `kurama_app`
+### Repurposed `kurama_app`
 
 ```text
 kurama_app/
@@ -44,25 +44,26 @@ kurama_app/
 └── .github/workflows/   App/backend validation and signed releases
 ```
 
-The new repository owns every feature used by app users, including authentication, profiles, credits, subscriptions, payments, downloads, browser functionality, vault behavior, Android/Windows builds and app-backend deployment.
+The renamed repository owns every feature used by app users, including authentication, profiles, credits, subscriptions, payments, downloads, browser functionality, vault behavior, Android/Windows builds and app-backend deployment.
 
 ## 3. Migration strategy
 
-Use a clean snapshot split rather than filtered Git history. Existing Telegram history remains intact. The app repository begins with an explicit migration commit that records the source repository and source commit.
+Use a clean snapshot split rather than filtered Git history. Existing Telegram history remains intact. The target `kurama_bot` repository currently contains only two commits, no releases and a small legacy Telegram prototype. Before repurposing it, preserve that state with an immutable archive tag and an `archive/legacy-kurama-bot` branch. Then rename the repository to `kurama_app` and begin the app migration with an explicit commit that records both source repositories and source commits.
 
 Migration order:
 
-1. Record a complete inventory and source commit.
-2. Create the private `kurama_app` repository initially.
-3. Copy only app-owned files into a clean local repository.
-4. Reorganize the copied files under `mobile/`, `backend/`, `supabase/`, `deployment/` and `tests/`.
-5. Make the new repository build and test independently.
-6. Deploy the new backend alongside the current service and run smoke tests.
-7. Release an app build pointing to the new backend.
-8. Confirm production behavior and rollback readiness.
-9. Only then remove app-owned files from `kurama_telebot` and simplify its deployment.
+1. Record a complete inventory and the exact source commits in both repositories.
+2. Preserve `kurama_bot` main as `archive/legacy-kurama-bot` and tag it `legacy-kurama-bot-2026-08-12`.
+3. Rename the GitHub repository from `kurama_bot` to `kurama_app`, update its description and retain the archive references.
+4. Copy only app-owned files from `kurama_telebot` into a clean migration branch in `kurama_app`.
+5. Reorganize the copied files under `mobile/`, `backend/`, `supabase/`, `deployment/` and `tests/`.
+6. Make `kurama_app` build and test independently without any Telegram runtime dependency.
+7. Deploy the new backend alongside the current service and run smoke tests.
+8. Release an app build pointing to the new backend.
+9. Confirm production behavior and rollback readiness.
+10. Only then remove app-owned files from `kurama_telebot` and simplify its deployment.
 
-At every migration checkpoint, the currently published bot and app remain usable. No cleanup of the original repository occurs until the replacement app pipeline is green.
+At every migration checkpoint, the currently published bot and app remain usable. The legacy target repository can be reconstructed from its archive tag, while the source app files remain in `kurama_telebot` until the replacement app pipeline is green. Repository redirects created by the GitHub rename are verified before downstream configuration is changed.
 
 ## 4. App architecture
 
@@ -148,7 +149,7 @@ The product roadmap is organized as dependent milestones:
 
 ### Phase 0 — Separation and reproducible foundation
 
-- Create the new repository and independent developer setup.
+- Archive the legacy `kurama_bot` state, rename it to `kurama_app`, and establish the independent developer setup.
 - Move app-owned code and copy the required downloader code.
 - Correct launcher/adaptive icons and consistent branding.
 - Establish development, staging and production configuration.
@@ -297,4 +298,3 @@ Separation is complete when:
 - Sharing a live downloader package between repositories
 - Rewriting the Flutter application from scratch
 - Moving production traffic before independent staging verification
-
