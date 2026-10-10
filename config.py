@@ -142,7 +142,19 @@ API_ADMIN_KEY = os.getenv("KURAMA_ADMIN_KEY") or None
 # Default API binding (0.0.0.0 for cloud hosting, PORT env var from platform)
 API_HOST = os.getenv("API_HOST") or "0.0.0.0"
 API_PORT = int(os.getenv("PORT") or os.getenv("API_PORT") or "8000")
-KEEP_ALIVE_URL = os.getenv("KEEP_ALIVE_URL") or os.getenv("RENDER_EXTERNAL_URL") or None
+
+# Auto-detect Render cloud hosting URL or default domain to keep service awake 24/7
+_render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+_render_svc = os.getenv("RENDER_SERVICE_NAME")
+_render_url = (
+    f"https://{_render_host}" if _render_host
+    else (f"https://{_render_svc}.onrender.com" if _render_svc else "https://kurama-telebot.onrender.com")
+)
+KEEP_ALIVE_URL = (
+    os.getenv("KEEP_ALIVE_URL")
+    or os.getenv("RENDER_EXTERNAL_URL")
+    or _render_url
+)
 
 # CORS allowed origins (comma-separated in env, or default to localhost only)
 _origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "")

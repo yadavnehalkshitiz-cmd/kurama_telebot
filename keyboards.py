@@ -11,7 +11,10 @@ def format_picker():
             InlineKeyboardButton("🎵 Audio", callback_data="fmt_audio"),
             InlineKeyboardButton("📄 File (no re-encode)", callback_data="fmt_doc"),
         ],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
+        [
+            InlineKeyboardButton("⚙️ Custom Quality", callback_data="fmt_quality"),
+            InlineKeyboardButton("❌ Cancel", callback_data="cancel"),
+        ],
     ])
 
 

@@ -1,6 +1,7 @@
 """KuramaBot — All command & callback handlers"""
 
 import os
+import re
 import time
 import shutil
 import logging
@@ -536,17 +537,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.debug(f"Thumbnail download failed: {e}")
 
     # ── Store session ───────────────────────────────────
+    sess_obj = {
+        "url": url,
+        "title": title,
+        "platform": platform,
+        "icon": icon,
+        "thumb_path": thumb_path,
+        "playlist": is_playlist_result,
+        "playlist_entries": entries if is_playlist_result else None,
+        "extractor": extractor,
+        "destination": "mobile",
+        "format": "video",
+        "video_quality": "best",
+    }
     async with _state_lock:
-        sessions[chat_id] = {
-            "url": url,
-            "title": title,
-            "platform": platform,
-            "icon": icon,
-            "thumb_path": thumb_path,
-            "playlist": is_playlist_result,
-            "playlist_entries": entries if is_playlist_result else None,
-            "extractor": extractor,
-        }
+        sessions[chat_id] = sess_obj
+    if context and context.user_data:
+        context.user_data["session"] = sess_obj
+        context.user_data["last_url"] = url
 
     # ── Build info caption ──────────────────────────────
     dur_str = human_duration(duration)
@@ -590,8 +598,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await status.edit_text(caption, parse_mode="Markdown", reply_markup=keyboard)
     except Exception as e:
-        logger.debug(f"Failed to send with thumbnail, falling back: {e}")
-        await status.edit_text(caption, parse_mode="Markdown", reply_markup=keyboard)
+        logger.warning(f"Failed to send with thumbnail/Markdown ({e}), falling back to plain text")
+        try:
+            clean_caption = re.sub(r"[*_`\[\]]", "", caption)
+            if thumb_path and os.path.exists(thumb_path):
+                try:
+                    await status.delete()
+                except Exception:
+                    pass
+                with open(thumb_path, "rb") as f:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=f,
+                        caption=clean_caption,
+                        parse_mode=None,
+                        reply_markup=keyboard,
+                    )
+            else:
+                await status.edit_text(clean_caption, parse_mode=None, reply_markup=keyboard)
+        except Exception as e2:
+            logger.error(f"Fallback send also failed: {e2}")
 
 
 # ═══════════════════════════════════════════════════════
@@ -741,31 +767,39 @@ async def _handle_mkdir_yes(query, context, chat_id):
 
 
 async def _handle_format(query, chat_id, data, context):
-    """User picked a format type (video / audio / doc / playlist)."""
+    """User picked a format type (video / audio / doc / quality)."""
     sess = sessions.get(chat_id)
     if not sess:
-        await _safe_edit(query, "⚠️ Session expired. Send the link again.")
+        sess = await _recover_session(query, chat_id, context)
+        if not sess:
+            await _safe_edit(query, "⚠️ Session expired. Please send the link again.")
+            return
+
+    if data == "fmt_video":
+        sess["format"] = "video"
+        sess["video_quality"] = "best"
+        sess["destination"] = "mobile"
+        await _run_download(chat_id, query, context)
         return
 
-    fmt_map = {
-        "fmt_video": "video",
-        "fmt_audio": "audio",
-        "fmt_doc": "doc",
-    }
-    fmt = fmt_map.get(data)
-    if not fmt:
-        await _safe_edit(query, "⚠️ Unknown format.")
+    if data == "fmt_audio":
+        sess["format"] = "audio"
+        sess["audio_quality"] = "best"
+        sess["destination"] = "mobile"
+        await _run_download(chat_id, query, context)
         return
 
-    sess["format"] = fmt
+    if data == "fmt_doc":
+        sess["format"] = "doc"
+        sess["destination"] = "mobile"
+        await _run_download(chat_id, query, context)
+        return
 
-    if fmt == "video":
+    if data == "fmt_quality":
         await _show_video_quality(query, chat_id)
-    elif fmt == "audio":
-        await _show_audio_quality(query, chat_id)
-    elif fmt == "doc":
-        # Document: no quality choice, go straight to destination
-        await _show_destination(query, chat_id, video=False, audio=False, doc=True, context=context)
+        return
+
+    await _safe_edit(query, "⚠️ Unknown format option.")
 
 
 async def _show_video_quality(query, chat_id):
@@ -795,19 +829,29 @@ async def _show_audio_quality(query, chat_id):
 async def _handle_video_quality(query, chat_id, data, context):
     sess = sessions.get(chat_id)
     if not sess:
-        return
+        sess = await _recover_session(query, chat_id, context)
+        if not sess:
+            await _safe_edit(query, "⚠️ Session expired. Please send the link again.")
+            return
     quality = data.split("_", 1)[1]  # "best", "1080p", etc.
+    sess["format"] = "video"
     sess["video_quality"] = quality
-    await _show_destination(query, chat_id, video=True, context=context)
+    sess["destination"] = "mobile"
+    await _run_download(chat_id, query, context)
 
 
 async def _handle_audio_quality(query, chat_id, data, context):
     sess = sessions.get(chat_id)
     if not sess:
-        return
+        sess = await _recover_session(query, chat_id, context)
+        if not sess:
+            await _safe_edit(query, "⚠️ Session expired. Please send the link again.")
+            return
     quality = data.split("_", 1)[1]  # "best", "320k", etc.
+    sess["format"] = "audio"
     sess["audio_quality"] = quality
-    await _show_destination(query, chat_id, audio=True, context=context)
+    sess["destination"] = "mobile"
+    await _run_download(chat_id, query, context)
 
 
 async def _show_destination(query, chat_id, video=False, audio=False, doc=False, context=None):
@@ -902,7 +946,7 @@ async def _run_download(chat_id, query, context):
     platform = sess["platform"]
     icon = sess["icon"]
     fmt = sess.get("format", "video")
-    dest = sess.get("destination", "laptop")
+    dest = sess.get("destination") or "mobile"
     audio_only = fmt == "audio"
     send_as_doc = fmt == "doc"
     video_quality = sess.get("video_quality", "best")
@@ -938,7 +982,15 @@ async def _run_download(chat_id, query, context):
             else:
                 await query.edit_message_text(text, parse_mode="Markdown", **kw)
         except Exception as e:
-            logger.debug(f"edit_msg failed: {e}")
+            logger.debug(f"edit_msg Markdown failed ({e}), attempting plain-text fallback")
+            try:
+                clean_text = re.sub(r"[*_`\[\]]", "", str(text))
+                if query.message and (query.message.photo or query.message.video or query.message.document or query.message.audio or query.message.animation):
+                    await query.edit_message_caption(caption=clean_text, parse_mode=None, **kw)
+                else:
+                    await query.edit_message_text(clean_text, parse_mode=None, **kw)
+            except Exception as e2:
+                logger.debug(f"edit_msg plain-text fallback failed: {e2}")
 
     tracker = ProgressTracker(chat_id, platform, audio_only, loop, edit_msg)
     ydl_opts = build_ydl_opts(
@@ -1257,7 +1309,7 @@ async def _process_queue(chat_id, query=None, context=None):
                 "icon": icon,
                 "format": "video",
                 "video_quality": "best",
-                "destination": "laptop",
+                "destination": "mobile",
             }
 
         if query:
@@ -1273,14 +1325,63 @@ async def _process_queue(chat_id, query=None, context=None):
 # ═══════════════════════════════════════════════════════
 
 async def _safe_edit(query, text, reply_markup=None):
-    """Edit message safely (handles deleted / expired / media captions)."""
+    """Edit message safely (handles deleted / expired / media captions, with plain text fallback)."""
     try:
         if query.message and (query.message.photo or query.message.video or query.message.document or query.message.audio or query.message.animation):
             await query.edit_message_caption(caption=text, parse_mode="Markdown", reply_markup=reply_markup)
         else:
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
     except Exception as e:
-        logger.debug(f"safe_edit failed: {e}")
+        logger.warning(f"safe_edit Markdown failed ({e}), attempting plain-text fallback")
+        try:
+            clean_text = re.sub(r"[*_`\[\]]", "", str(text))
+            if query.message and (query.message.photo or query.message.video or query.message.document or query.message.audio or query.message.animation):
+                await query.edit_message_caption(caption=clean_text, parse_mode=None, reply_markup=reply_markup)
+            else:
+                await query.edit_message_text(clean_text, parse_mode=None, reply_markup=reply_markup)
+        except Exception as e2:
+            logger.debug(f"safe_edit plain-text fallback also failed: {e2}")
+
+
+async def _recover_session(query, chat_id, context):
+    """Recover expired or post-restart session from user_data or message history."""
+    sess = context.user_data.get("session") if context and context.user_data else None
+    if sess and sess.get("url"):
+        async with _state_lock:
+            sessions[chat_id] = sess
+        return sess
+
+    url = None
+    if context and context.user_data and context.user_data.get("last_url"):
+        url = context.user_data.get("last_url")
+    elif query.message and query.message.reply_to_message and query.message.reply_to_message.text:
+        text = query.message.reply_to_message.text
+        m = re.search(r"https?://[^\s]+", text)
+        if m:
+            url = m.group(0)
+
+    if url:
+        try:
+            platform, icon = get_platform(url)
+            info = await asyncio.to_thread(fetch_info, url, platform)
+            title = clean_md(info.get("title") or info.get("webpage_title", "Unknown Title"))
+            recovered = {
+                "url": url,
+                "title": title,
+                "platform": platform,
+                "icon": icon,
+                "destination": "mobile",
+                "format": "video",
+                "video_quality": "best",
+            }
+            async with _state_lock:
+                sessions[chat_id] = recovered
+            if context and context.user_data:
+                context.user_data["session"] = recovered
+            return recovered
+        except Exception as e:
+            logger.warning(f"Failed to auto-recover session for {url}: {e}")
+    return None
 
 
 async def _show_format_picker(query, chat_id):

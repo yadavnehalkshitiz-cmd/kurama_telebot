@@ -174,7 +174,7 @@ def main():
         print("[BOT] ⚠️  ESEWA_ID is still the placeholder — update in Render env vars!")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-    app.run_polling(bootstrap_retries=5, drop_pending_updates=True)
+    app.run_polling(bootstrap_retries=5, drop_pending_updates=False)
 
 
 if __name__ == "__main__":
