@@ -4,17 +4,51 @@ import sys
 import os
 import signal
 
+import threading
+import urllib.request
+from config import KEEP_ALIVE_URL
+
+
+def start_keep_alive_pinger():
+    """Periodically ping Render/server health endpoint to prevent free-tier spin down."""
+    target_url = KEEP_ALIVE_URL
+    if not target_url:
+        return
+
+    target_url = target_url.rstrip("/")
+    probe_url = target_url if target_url.endswith(("/health", "/api/health")) else f"{target_url}/health"
+
+    def _pinger_loop():
+        print(f"[KEEPALIVE] Keep-alive active -> Pinging {probe_url} every 8 minutes to prevent sleep.")
+        time.sleep(30)
+        while True:
+            try:
+                req = urllib.request.Request(
+                    probe_url,
+                    headers={"User-Agent": "KuramaBot-KeepAlive/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [KEEPALIVE] Ping to {probe_url} succeeded (HTTP {resp.getcode()})")
+            except Exception as e:
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [KEEPALIVE] Ping warning: {e}")
+            time.sleep(480)
+
+    t = threading.Thread(target=_pinger_loop, daemon=True)
+    t.start()
+
+
 # --- BOT SUPERVISOR ---
 def run_supervisor():
     """Runs the bot and API server, restarting them if they crash."""
     # Detect python executable (local .venv vs global/container)
+    venv_python = sys.executable
     if os.path.exists(".venv"):
-        venv_python = os.path.join(".venv", "Scripts", "python.exe") if os.name == 'nt' else os.path.join(".venv", "bin", "python")
-    else:
-        # If no venv, we assume we are in a container/server with global python
-        venv_python = sys.executable
+        candidate = os.path.join(".venv", "Scripts", "python.exe") if os.name == 'nt' else os.path.join(".venv", "bin", "python")
+        if os.path.isfile(candidate):
+            venv_python = candidate
 
     print("--- Starting KuramaBot Supervisor ---")
+    start_keep_alive_pinger()
     
     bot_proc = None
     api_proc = None

@@ -457,6 +457,8 @@ def _safe_filename(name: str) -> str:
 #  ENDPOINTS
 # ═══════════════════════════════════════════════════════
 
+@app.get("/")
+@app.get("/health")
 @app.get("/api/health")
 def health_check():
     """Public liveness probe — also reports operator-relevant state."""
@@ -1002,10 +1004,8 @@ def run_api_server():
     import uvicorn
 
     if API_AUTH_KEY is None:
-        print("[ERR] Cannot start API server: KURAMA_API_KEY is not set in .env")
-        print("      Set a strong random key, e.g.:")
-        print("        KURAMA_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")")
-        sys.exit(1)
+        print("[WARN] KURAMA_API_KEY is not set in .env.")
+        print("       Protected API endpoints will return 503, but health endpoints remain active.")
 
     print(f"[API] KuramaBot API starting on {API_HOST}:{API_PORT}")
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level="info")
