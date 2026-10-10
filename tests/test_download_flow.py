@@ -81,5 +81,40 @@ class TestDownloadFlow(unittest.IsolatedAsyncioTestCase):
         self.assertIn(chat_id, sessions)
 
 
+    async def test_handle_document_installs_cookies(self):
+        from handlers import handle_document
+        import os
+        from config import COOKIES_FOLDER
+
+        update = MagicMock()
+        update.effective_chat.id = 999444
+        doc = MagicMock()
+        doc.file_name = "instagram.txt"
+        doc.file_size = 1024
+        doc.file_id = "doc_123"
+        update.message.document = doc
+
+        status_msg = MagicMock()
+        status_msg.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=status_msg)
+
+        context = MagicMock()
+        tg_file = MagicMock()
+        cookie_data = b"# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t1800000000\tsessionid\tabc123\n"
+        tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(cookie_data))
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+
+        await handle_document(update, context)
+
+        status_msg.edit_text.assert_awaited()
+        call_text = status_msg.edit_text.await_args[0][0]
+        self.assertIn("Instagram Cookies Installed", call_text)
+
+        installed_path = os.path.join(COOKIES_FOLDER, "instagram.txt")
+        self.assertTrue(os.path.exists(installed_path))
+        with open(installed_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), cookie_data.decode("utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

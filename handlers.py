@@ -340,7 +340,6 @@ async def revokeplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cookies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     cookies_path = COOKIES_FOLDER
     platforms = ["instagram", "youtube", "twitter", "facebook", "tiktok", "reddit"]
     lines = []
@@ -351,21 +350,99 @@ async def cookies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "*🍪 Cookie Setup Guide*\n\n"
-        "Some platforms (Instagram, Twitter/X, Facebook) need login cookies.\n\n"
+        "Platforms like Instagram and Twitter require login cookies on cloud servers.\n\n"
         "─────────────────────\n"
         "*Current status:*\n"
         f"{chr(10).join(lines)}\n\n"
         "─────────────────────\n"
-        "*How-to:*\n"
-        "1. Install *Get cookies.txt LOCALLY* Chrome extension\n"
-        "2. Log in to the platform in Chrome\n"
-        "3. Export cookies, save to:\n"
-        f"   `{cookies_path}`\n"
-        "   Filename: `instagram.txt`, `twitter.txt`, etc.\n"
-        "4. Restart the bot ✅\n\n"
-        "_Cookies stay on your laptop, never shared._",
+        "*How to upload cookies (Super Easy):*\n"
+        "1. Install the free browser extension: *Get cookies.txt LOCALLY*\n"
+        "2. Log in to Instagram/Twitter in your browser.\n"
+        "3. Click the extension, export `instagram.txt` (or `cookies.txt`).\n"
+        "4. **Send the `.txt` file directly into this Telegram chat!** 📄\n\n"
+        "The bot will automatically install and activate them instantly. No server restarts needed!",
         parse_mode="Markdown",
     )
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle document uploads, specifically Netscape cookie files."""
+    doc = update.message.document
+    if not doc:
+        return
+
+    chat_id = update.effective_chat.id
+    filename = (doc.file_name or "").lower()
+
+    if not filename.endswith(".txt"):
+        return
+
+    # Check file size (max 5 MB for cookie files)
+    if doc.file_size and doc.file_size > 5 * 1024 * 1024:
+        await update.message.reply_text("⚠️ File is too large for a cookie file.")
+        return
+
+    status = await update.message.reply_text("📥 *Processing cookie file…*", parse_mode="Markdown")
+
+    try:
+        tg_file = await context.bot.get_file(doc.file_id)
+        file_bytes = await tg_file.download_as_bytearray()
+        content = file_bytes.decode("utf-8", errors="ignore")
+
+        # Basic Netscape cookie check (domain, expiration, name, value)
+        is_netscape = (
+            content.startswith("# Netscape")
+            or content.startswith("# HTTP Cookie File")
+            or "\t" in content
+        )
+
+        if not is_netscape:
+            await status.edit_text(
+                "⚠️ This file doesn't appear to be a valid Netscape format cookie file.\n"
+                "Please export using the *Get cookies.txt LOCALLY* browser extension.",
+                parse_mode="Markdown",
+            )
+            return
+
+        # Determine target platform
+        target_name = "cookies.txt"
+        platform_detected = "Generic"
+        if "instagram" in filename or ".instagram.com" in content:
+            target_name = "instagram.txt"
+            platform_detected = "Instagram"
+        elif "youtube" in filename or ".youtube.com" in content:
+            target_name = "youtube.txt"
+            platform_detected = "YouTube"
+        elif "twitter" in filename or "x.com" in content or ".twitter.com" in content:
+            target_name = "twitter.txt"
+            platform_detected = "Twitter/X"
+        elif "facebook" in filename or ".facebook.com" in content:
+            target_name = "facebook.txt"
+            platform_detected = "Facebook"
+        elif "tiktok" in filename or ".tiktok.com" in content:
+            target_name = "tiktok.txt"
+            platform_detected = "TikTok"
+
+        os.makedirs(COOKIES_FOLDER, exist_ok=True)
+        target_path = os.path.join(COOKIES_FOLDER, target_name)
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # Also write root cookies.txt if it's generic or instagram
+        if platform_detected == "Instagram":
+            root_cookie = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+            with open(root_cookie, "w", encoding="utf-8") as f:
+                f.write(content)
+
+        await status.edit_text(
+            f"✅ *{platform_detected} Cookies Installed!*\n\n"
+            f"🍪 Saved: `{target_name}` ({human_size(len(file_bytes))})\n"
+            f"🚀 Links from *{platform_detected}* will now download smoothly without login walls!",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.error(f"Failed to process cookie document: {e}")
+        await status.edit_text(f"❌ Failed to process file: `{str(e)[:150]}`", parse_mode="Markdown")
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -489,10 +566,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = await asyncio.to_thread(fetch_info, url, platform)
     except Exception as e:
         logger.error(f"Fetch info failed [{platform}]: {e}")
-        await status.edit_text(
-            f"❌ *Could not fetch info.*\n`{str(e)[:200]}`",
-            parse_mode="Markdown",
-        )
+        err_str = str(e).lower()
+        if platform == "Instagram" and any(k in err_str for k in ("empty media response", "login required", "rate-limit reached", "requested content is not available")):
+            msg = (
+                "🔐 *Instagram Login Required*\n\n"
+                "Instagram blocks cloud servers from accessing reels without a logged-in session.\n\n"
+                "💡 *Quick Fix in 30 Seconds:*\n"
+                "1. Install the free browser extension: *Get cookies.txt LOCALLY*\n"
+                "2. Log in to [Instagram](https://www.instagram.com/) in your browser.\n"
+                "3. Click the extension, export `instagram.txt` (or `cookies.txt`).\n"
+                "4. **Send that `.txt` file directly into this Telegram chat!** 📄\n\n"
+                "_The bot will install the cookies automatically and unlock all Instagram Reels!_"
+            )
+        elif any(k in err_str for k in ("sign in", "login", "log in")):
+            msg = f"🔒 *Login Required*\n\nThis content is private or age-restricted on {platform}. Export cookies with `/cookies` to download."
+        elif any(k in err_str for k in ("unavailable", "removed", "404")):
+            msg = f"🚫 *Not Found*\n\nThis video is unavailable or was removed on {platform}."
+        else:
+            msg = f"❌ *Could not fetch info.*\n`{str(e)[:250]}`"
+
+        try:
+            await status.edit_text(msg, parse_mode="Markdown")
+        except Exception:
+            clean_msg = re.sub(r"[*_`\[\]]", "", msg)
+            await status.edit_text(clean_msg, parse_mode=None)
         return
 
     # ── Check if playlist ───────────────────────────────
