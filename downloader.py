@@ -30,7 +30,53 @@ logger = logging.getLogger(__name__)
 
 # ─── Cookie helper ──────────────────────────────────────
 
+def sync_cookies_from_env():
+    """Extract cookies from environment variables if set (useful on Render/cloud)."""
+    try:
+        os.makedirs(COOKIES_FOLDER, exist_ok=True)
+        env_map = {
+            "youtube": ("YOUTUBE_COOKIES", "youtube.txt"),
+            "instagram": ("INSTAGRAM_COOKIES", "instagram.txt"),
+            "twitter": ("TWITTER_COOKIES", "twitter.txt"),
+            "tiktok": ("TIKTOK_COOKIES", "tiktok.txt"),
+            "facebook": ("FACEBOOK_COOKIES", "facebook.txt"),
+        }
+        for key, (env_var, filename) in env_map.items():
+            val = os.getenv(env_var)
+            if val and val.strip():
+                target = os.path.join(COOKIES_FOLDER, filename)
+                raw = val.strip()
+                if raw.startswith("# Netscape") or "\t" in raw:
+                    content = raw
+                else:
+                    import base64
+                    try:
+                        content = base64.b64decode(raw).decode("utf-8")
+                    except Exception:
+                        content = raw
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+        generic_val = os.getenv("COOKIES_TXT") or os.getenv("COOKIES_CONTENT")
+        if generic_val and generic_val.strip():
+            generic_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+            raw_g = generic_val.strip()
+            if raw_g.startswith("# Netscape") or "\t" in raw_g:
+                g_content = raw_g
+            else:
+                import base64
+                try:
+                    g_content = base64.b64decode(raw_g).decode("utf-8")
+                except Exception:
+                    g_content = raw_g
+            with open(generic_path, "w", encoding="utf-8") as f:
+                f.write(g_content)
+    except Exception as e:
+        logger.debug(f"sync_cookies_from_env error: {e}")
+
+
 def get_cookie_file(platform: str) -> str | None:
+    sync_cookies_from_env()
     name_map = PLATFORM_COOKIE_MAP
     key = name_map.get(platform)
     if key:
@@ -108,6 +154,7 @@ def build_ydl_opts(
         "geo_bypass": True,
         "user_agent": CHROME_UA,
         "socket_timeout": SOCKET_TIMEOUT,
+        "remote_components": ["ejs:github"],
         "extractor_args": {},  # will be overridden per-platform
         "retries": 5,
         "fragment_retries": 5,
@@ -151,36 +198,17 @@ def _apply_platform_overrides(opts, platform, cookie_file, for_mobile):
     if platform == "YouTube":
         opts["extractor_args"] = {
             "youtube": {
-                "player_client": ["web", "android", "ios"],
-                "skip": ["hls", "dash"] if not for_mobile else [],
+                "player_client": ["web", "mweb", "android"],
             }
         }
 
     elif platform == "Instagram":
-        # Instagram serves single merged streams — NOT separate video+audio tracks.
-        # Forcing bestvideo+bestaudio fails because those streams don't exist.
-        # Override format to a single-stream selector regardless of quality choice.
-        quality = opts.get("format", "best")
-        # Map the quality selector to Instagram-compatible single-stream format
-        _insta_fmt_map = {
-            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best":            "best[ext=mp4]/best",
-            "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[height<=1080]/best": "best[height<=1080][ext=mp4]/best[height<=1080]/best",
-            "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[height<=720]/best":  "best[height<=720][ext=mp4]/best[height<=720]/best",
-            "bestvideo[ext=mp4][height<=480]+bestaudio[ext=m4a]/best[height<=480]/best":  "best[height<=480][ext=mp4]/best[height<=480]/best",
-        }
-        opts["format"] = _insta_fmt_map.get(quality, "best[ext=mp4]/best")
+        opts["format"] = "best/bestvideo+bestaudio"
         opts["http_headers"] = {
             "User-Agent": CHROME_UA,
             "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
             "Referer": "https://www.instagram.com/",
-            "X-IG-App-ID": INSTAGRAM_APP_ID,
-            "X-ASBD-ID": "129477",
-            "X-IG-WWW-Claim": "0",
-            "Origin": "https://www.instagram.com",
         }
-        opts["extractor_args"] = {"instagram": {"include_dash_manifest": ["0"]}}
         # Allow session cookies from browser as fallback
         if not cookie_file:
             logger.warning("Instagram download attempted without cookies — login-required posts will fail")
@@ -333,7 +361,11 @@ def download_single(url: str, ydl_opts: dict):
 async def compress_for_telegram(input_path: str) -> str:
     """Compress video to fit under 50 MB using FFmpeg."""
     ffmpeg_path = get_ffmpeg_path()
-    out_path = input_path.replace(".mp4", "_compressed.mp4")
+    base, _ = os.path.splitext(input_path)
+    out_path = f"{base}_compressed.mp4"
+    if os.path.abspath(out_path) == os.path.abspath(input_path):
+        out_path = f"{base}_c.mp4"
+
     cmd = [
         ffmpeg_path,
         "-i", input_path,
@@ -353,5 +385,34 @@ async def compress_for_telegram(input_path: str) -> str:
     )
     _, stderr = await proc.communicate()
     if proc.returncode != 0:
-        raise RuntimeError(stderr.decode()[-300:])
+        raise RuntimeError(stderr.decode(errors="ignore")[-300:])
+
+    # If still over 48 MB, do a more aggressive compression pass (480p, CRF 32)
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 48 * 1024 * 1024:
+        low_path = f"{base}_c480.mp4"
+        cmd_low = [
+            ffmpeg_path,
+            "-i", input_path,
+            "-vcodec", "libx264",
+            "-crf", "32",
+            "-preset", "fast",
+            "-vf", "scale=-2:480",
+            "-acodec", "aac",
+            "-b:a", "96k",
+            "-movflags", "+faststart",
+            "-y", low_path,
+        ]
+        proc_low = await asyncio.create_subprocess_exec(
+            *cmd_low,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc_low.communicate()
+        if os.path.exists(low_path) and os.path.getsize(low_path) < os.path.getsize(out_path):
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+            return low_path
+
     return out_path

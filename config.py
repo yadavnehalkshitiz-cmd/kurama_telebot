@@ -51,17 +51,17 @@ MOBILE_UA = (
 
 # ─── Quality presets ────────────────────────────────────
 VIDEO_QUALITIES = {
-    "best":  "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-    "1080p": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[height<=1080]/best",
-    "720p":  "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[height<=720]/best",
-    "480p":  "bestvideo[ext=mp4][height<=480]+bestaudio[ext=m4a]/best[height<=480]/best",
+    "best":  "bestvideo+bestaudio/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
 }
 
 MOBILE_QUALITIES = {
-    "best":  "best[ext=mp4]/best",
-    "1080p": "best[height<=1080][ext=mp4]/best[height<=1080]/best",
-    "720p":  "best[height<=720][ext=mp4]/best[height<=720]/best",
-    "480p":  "best[height<=480][ext=mp4]/best[height<=480]/best",
+    "best":  "bestvideo+bestaudio/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
 }
 
 AUDIO_QUALITIES = {
@@ -142,6 +142,7 @@ API_ADMIN_KEY = os.getenv("KURAMA_ADMIN_KEY") or None
 # Default API binding (0.0.0.0 for cloud hosting, PORT env var from platform)
 API_HOST = os.getenv("API_HOST") or "0.0.0.0"
 API_PORT = int(os.getenv("PORT") or os.getenv("API_PORT") or "8000")
+KEEP_ALIVE_URL = os.getenv("KEEP_ALIVE_URL") or os.getenv("RENDER_EXTERNAL_URL") or None
 
 # CORS allowed origins (comma-separated in env, or default to localhost only)
 _origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "")

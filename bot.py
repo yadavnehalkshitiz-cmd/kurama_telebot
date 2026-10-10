@@ -111,6 +111,12 @@ def main():
 
     wait_for_network()
 
+    try:
+        from run_bot import start_keep_alive_pinger
+        start_keep_alive_pinger()
+    except Exception:
+        pass
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     # ── Commands ────────────────────────────────────────

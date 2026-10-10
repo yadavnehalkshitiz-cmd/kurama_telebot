@@ -510,6 +510,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upload_date = fmt_date(info.get("upload_date"))
     extractor = info.get("extractor_key", "")
 
+    # Check if this is an active live stream or upcoming premiere
+    if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming", "post_live_recording_unavailable"):
+        await status.edit_text(
+            f"🔴 *Live Stream / Premiere Detected*\n\n"
+            f"📌 *{shorten(title)}*\n"
+            f"👤 {uploader}\n\n"
+            f"⚠️ KuramaBot cannot download live broadcasts while they are streaming. "
+            f"Please wait until the live stream ends and is published as a regular video.",
+            parse_mode="Markdown",
+        )
+        return
+
     views_str = f"{views:,}" if views else "N/A"
 
     # Try to download thumbnail (non-blocking, SSRF-safe)
@@ -867,8 +879,10 @@ async def _run_download(chat_id, query, context):
     is_admin = bool(config.ADMIN_CHAT_ID and chat_id == config.ADMIN_CHAT_ID)
 
     # ── Check billing / credits (Admin is exempt) ───────
+    charged_credit = False
     if not is_admin:
-        if not user_config.is_subscription_active(chat_id) and user_config.get_user_credits(chat_id) <= 0:
+        allowed, charged = user_config.consume_download_credit(chat_id)
+        if not allowed:
             await _safe_edit(
                 query,
                 "🔒 *Free Download Limit Reached!*\n\n"
@@ -878,9 +892,7 @@ async def _run_download(chat_id, query, context):
             )
             _cleanup_session(chat_id)
             return
-
-        # Deduct credit for non-admin free tier user
-        user_config.deduct_credit(chat_id)
+        charged_credit = charged
 
     async with _state_lock:
         active_downloads.add(chat_id)
@@ -957,6 +969,8 @@ async def _run_download(chat_id, query, context):
         file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
     except Exception as e:
         logger.error(f"Download error [{platform}]: {e}")
+        if charged_credit:
+            user_config.refund_credit(chat_id)
         await _show_download_error(query, chat_id, platform, e)
         async with _state_lock:
             active_downloads.discard(chat_id)
@@ -1143,8 +1157,8 @@ async def _show_download_error(query, chat_id, platform, exc):
         msg = "🌍 This video is geo‑restricted and not available in your region."
     elif "age" in err or "18+" in err or "age-restrict" in err:
         msg = "🔞 Age‑restricted content. Log in and export cookies to download."
-    elif "live" in err or "stream" in err:
-        msg = "🔴 This is a live stream or premiere — wait until it ends to download."
+    elif any(k in err for k in ("live stream", "is currently live", "livestream", "premiere has not started", "upcoming event", "stream is offline", "this live event")):
+        msg = "🔴 This is an active live stream or premiere — wait until it finishes to download."
     elif "membership" in err or "sponsor" in err or "member" in err:
         msg = "⭐ This video requires a channel membership. Log in to access."
     elif "download" in err and "limit" in err:

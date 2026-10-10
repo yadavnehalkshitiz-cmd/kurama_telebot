@@ -18,3 +18,7 @@ thumb_cache/
 user_configs.json
 *.log
 bot_output.log
+
+# IDE and tooling
+.idea/
+.artifacts/

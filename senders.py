@@ -39,16 +39,30 @@ async def send_video(context, chat_id, filepath, title, icon):
                 )
             filepath = compressed_path
 
-        with open(filepath, "rb") as f:
-            await context.bot.send_video(
-                chat_id=chat_id,
-                video=f,
-                caption=f"{icon} *{title}*\n\n_Sent via KuramaBot_",
-                parse_mode="Markdown",
-                supports_streaming=True,
-                read_timeout=_READ_TIMEOUT,
-                write_timeout=_WRITE_TIMEOUT,
-            )
+        try:
+            with open(filepath, "rb") as f:
+                await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=f,
+                    caption=f"{icon} *{title}*\n\n_Sent via KuramaBot_",
+                    parse_mode="Markdown",
+                    supports_streaming=True,
+                    read_timeout=_READ_TIMEOUT,
+                    write_timeout=_WRITE_TIMEOUT,
+                )
+        except Exception as e:
+            if "can't parse entities" in str(e).lower() or "parse" in str(e).lower():
+                with open(filepath, "rb") as f:
+                    await context.bot.send_video(
+                        chat_id=chat_id,
+                        video=f,
+                        caption=f"{icon} {title}\n\nSent via KuramaBot",
+                        supports_streaming=True,
+                        read_timeout=_READ_TIMEOUT,
+                        write_timeout=_WRITE_TIMEOUT,
+                    )
+            else:
+                raise
     finally:
         # Always clean up compressed file, even if send fails
         if compressed_path and os.path.exists(compressed_path):
@@ -60,15 +74,28 @@ async def send_video(context, chat_id, filepath, title, icon):
 
 async def send_audio(context, chat_id, filepath, title, icon):
     """Send audio file (MP3)."""
-    with open(filepath, "rb") as f:
-        await context.bot.send_audio(
-            chat_id=chat_id,
-            audio=f,
-            caption=f"{icon} *{title}*\n\n_Sent via KuramaBot_",
-            parse_mode="Markdown",
-            read_timeout=_READ_TIMEOUT,
-            write_timeout=_WRITE_TIMEOUT,
-        )
+    try:
+        with open(filepath, "rb") as f:
+            await context.bot.send_audio(
+                chat_id=chat_id,
+                audio=f,
+                caption=f"{icon} *{title}*\n\n_Sent via KuramaBot_",
+                parse_mode="Markdown",
+                read_timeout=_READ_TIMEOUT,
+                write_timeout=_WRITE_TIMEOUT,
+            )
+    except Exception as e:
+        if "can't parse entities" in str(e).lower() or "parse" in str(e).lower():
+            with open(filepath, "rb") as f:
+                await context.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=f,
+                    caption=f"{icon} {title}\n\nSent via KuramaBot",
+                    read_timeout=_READ_TIMEOUT,
+                    write_timeout=_WRITE_TIMEOUT,
+                )
+        else:
+            raise
 
 
 async def send_document(context, chat_id, filepath, title, icon):
@@ -80,12 +107,25 @@ async def send_document(context, chat_id, filepath, title, icon):
             "Try Video format instead (it will compress)."
         )
 
-    with open(filepath, "rb") as f:
-        await context.bot.send_document(
-            chat_id=chat_id,
-            document=f,
-            caption=f"{icon} *{title}*\n\n_Sent via KuramaBot_",
-            parse_mode="Markdown",
-            read_timeout=_READ_TIMEOUT,
-            write_timeout=_WRITE_TIMEOUT,
-        )
+    try:
+        with open(filepath, "rb") as f:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                caption=f"{icon} *{title}*\n\n_Sent via KuramaBot_",
+                parse_mode="Markdown",
+                read_timeout=_READ_TIMEOUT,
+                write_timeout=_WRITE_TIMEOUT,
+            )
+    except Exception as e:
+        if "can't parse entities" in str(e).lower() or "parse" in str(e).lower():
+            with open(filepath, "rb") as f:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=f,
+                    caption=f"{icon} {title}\n\nSent via KuramaBot",
+                    read_timeout=_READ_TIMEOUT,
+                    write_timeout=_WRITE_TIMEOUT,
+                )
+        else:
+            raise

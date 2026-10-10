@@ -1,0 +1,17 @@
+.venv
+.git
+.github
+.idea
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+ffmpeg.exe
+kurama_mobile
+downloads
+saved_videos
+temp_mobile
+thumb_cache
+.artifacts
+.pytest_cache
