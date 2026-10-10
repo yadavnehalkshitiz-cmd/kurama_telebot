@@ -25,11 +25,13 @@ if sys.platform == "win32":
         except Exception:
             pass
 
+import telegram.error
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ContextTypes,
     filters,
 )
 
@@ -134,6 +136,23 @@ def main():
     app.add_handler(CommandHandler("cancel", cancel_cmd))
     app.add_handler(CommandHandler("queue", queue_cmd))
     app.add_handler(CommandHandler("setfolder", setfolder_cmd))
+
+    # ── Error handler ───────────────────────────────────
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle unexpected bot errors gracefully."""
+        err = context.error
+        if isinstance(err, telegram.error.Conflict):
+            logger.warning(
+                "[BOT] Telegram Conflict (409): Another instance polled simultaneously. "
+                "(Normal during Render rolling redeploys; will clear automatically.)"
+            )
+            return
+        if isinstance(err, telegram.error.NetworkError):
+            logger.warning(f"[BOT] Network issue: {err}. Retrying automatically...")
+            return
+        logger.error("Unhandled bot exception:", exc_info=err)
+
+    app.add_error_handler(error_handler)
 
     # ── Messages (URLs) + Callbacks ─────────────────────
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
