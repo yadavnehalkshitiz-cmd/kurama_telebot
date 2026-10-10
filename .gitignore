@@ -22,3 +22,4 @@ bot_output.log
 # IDE and tooling
 .idea/
 .artifacts/
+.vscode/
